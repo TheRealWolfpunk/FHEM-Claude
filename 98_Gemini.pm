@@ -39,6 +39,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.2.0 - 2026-04-09  Fix: control-Befehl übergibt Alias→Name-Mapping als
+#                          system_instruction, damit Gemini Sprachbefehle
+#                          (Alias-Namen) auf interne FHEM-Namen auflösen kann
 # 2.1.0 - 2026-04-09  Neues Attribut deviceRoom: Geräte automatisch per Raum
 #                          filtern (komma-getrennte Räume möglich); deviceList
 #                          und deviceRoom werden kombiniert, Duplikate vermieden
@@ -95,7 +98,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '2.1.0';
+    $hash->{VERSION}     = '2.2.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -465,6 +468,29 @@ sub Gemini_BuildDeviceContext {
 }
 
 ##############################################################################
+# Hilfsfunktion: Gerätekontext für control-Befehl aufbauen (Alias-Mapping)
+##############################################################################
+sub Gemini_BuildControlContext {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+
+    my $controlList = AttrVal($name, 'controlList', '');
+    return '' unless $controlList;
+
+    my @devices = split(/\s*,\s*/, $controlList);
+    return '' unless @devices;
+
+    my $context = "Verfügbare Geräte (Alias => interner FHEM-Name):\n";
+    for my $devName (@devices) {
+        next unless exists $main::defs{$devName};
+        my $alias = AttrVal($devName, 'alias', $devName);
+        $context .= "  $alias => $devName\n";
+    }
+
+    return $context;
+}
+
+##############################################################################
 # Hilfsfunktion: Tool-Definitionen für Function Calling zurückgeben
 ##############################################################################
 sub Gemini_GetControlTools {
@@ -548,10 +574,17 @@ sub Gemini_SendControl {
         tools    => Gemini_GetControlTools()
     );
 
-    my $systemPrompt = AttrVal($name, 'systemPrompt', '');
-    if ($systemPrompt) {
+    my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
+    my $controlContext = Gemini_BuildControlContext($hash);
+
+    my $fullSystem = '';
+    $fullSystem .= $systemPrompt    if $systemPrompt;
+    $fullSystem .= "\n\n"           if $systemPrompt && $controlContext;
+    $fullSystem .= $controlContext  if $controlContext;
+
+    if ($fullSystem) {
         $requestBody{system_instruction} = {
-            parts => [{ text => $systemPrompt }]
+            parts => [{ text => $fullSystem }]
         };
     }
 
@@ -774,10 +807,17 @@ sub Gemini_SendFunctionResult {
         tools    => Gemini_GetControlTools()
     );
 
-    my $systemPrompt = AttrVal($name, 'systemPrompt', '');
-    if ($systemPrompt) {
+    my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
+    my $controlContext = Gemini_BuildControlContext($hash);
+
+    my $fullSystem = '';
+    $fullSystem .= $systemPrompt    if $systemPrompt;
+    $fullSystem .= "\n\n"           if $systemPrompt && $controlContext;
+    $fullSystem .= $controlContext  if $controlContext;
+
+    if ($fullSystem) {
         $requestBody{system_instruction} = {
-            parts => [{ text => $systemPrompt }]
+            parts => [{ text => $fullSystem }]
         };
     }
 
@@ -838,6 +878,8 @@ sub Gemini_SendFunctionResult {
       Kann zusammen mit <b>deviceList</b> verwendet werden.</li>
     <li><b>controlList</b> - Komma-getrennte Liste der Geraete, die Gemini per
       Function Calling steuern darf (Pflicht fuer den control-Befehl).
+      Die Alias-Namen der Geraete werden automatisch an Gemini uebermittelt,
+      sodass Sprachbefehle mit Alias-Namen funktionieren.
       Beispiel: <code>attr GeminiAI controlList Lampe1,Heizung,Rolladen1</code></li>
   </ul><br>
 
