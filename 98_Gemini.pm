@@ -39,6 +39,8 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.2.1 - 2026-04-09  Fix: Regex fuer verbotene Zeichen auf eine Zeile
+#                          zusammengefasst (\n statt literal newline im Source)
 # 2.2.0 - 2026-04-09  Fix: control-Befehl übergibt Alias→Name-Mapping als
 #                          system_instruction, damit Gemini Sprachbefehle
 #                          (Alias-Namen) auf interne FHEM-Namen auflösen kann
@@ -98,7 +100,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '2.2.0';
+    $hash->{VERSION}     = '2.2.1';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -670,9 +672,7 @@ sub Gemini_HandleControlResponse {
                 my $device  = $args->{device}  // '';
                 my $command = $args->{command} // '';
 
-                if ($command =~ /[;|`\$\(\)<>
-
-]/) {
+                if ($command =~ /[;|`\$\(\)<>\n]/) {
                     my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
                     Log3 $name, 2, "Gemini ($name): $errMsg";
                     Gemini_SendFunctionResult($hash, $fcName, $errMsg);
