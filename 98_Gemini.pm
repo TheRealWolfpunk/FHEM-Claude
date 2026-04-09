@@ -78,12 +78,12 @@ sub Gemini_Initialize {
         'apiKey ' .
         'model ' .
         'maxHistory:5,10,20,50,100 ' .
-        'systemPrompt ' .
         'timeout ' .
         'disable:0,1 ' .
-        'deviceList ' .
-        'deviceRoom ' .
-        'controlList ' .
+        'deviceList:textField-long '
+        'controlList:textField-long '
+        'deviceRoom:textField-long '
+        'systemPrompt:textField-long '
         $readingFnAttributes;
 
     return undef;
@@ -671,7 +671,8 @@ sub Gemini_HandleControlResponse {
                 my $command = $args->{command} // '';
 
                 if ($command =~ /[;|`\$\(\)<>
-]/) {
+
+]/) {
                     my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
                     Log3 $name, 2, "Gemini ($name): $errMsg";
                     Gemini_SendFunctionResult($hash, $fcName, $errMsg);
