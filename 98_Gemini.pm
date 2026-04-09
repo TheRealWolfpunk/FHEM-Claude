@@ -20,6 +20,7 @@
 #   deviceRoom    - Komma-getrennte Raumliste; Geräte mit passendem room-Attribut
 #                   werden automatisch für askAboutDevices verwendet
 #   controlList   - Komma-getrennte Liste der Geräte, die Gemini steuern darf
+#   disableHistory - Chat-Verlauf deaktivieren (0/1); jede Anfrage wird als eigenstaendiges Gespraech behandelt
 #
 # Set-Befehle:
 #   ask <Frage>                    - Textfrage stellen
@@ -39,6 +40,8 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.4.0 - 2026-04-09  Neues Attribut disableHistory: Chat-Verlauf deaktivieren,
+#                          jede Anfrage wird als eigenstaendiges Gespraech behandelt
 # 2.3.0 - 2026-04-09  Gemini_BuildControlContext gibt jetzt auch die
 #                          verfuegbaren set-Befehle jedes Geraets aus, damit
 #                          Gemini passende Befehle waehlen kann
@@ -85,6 +88,7 @@ sub Gemini_Initialize {
         'maxHistory:5,10,20,50,100 ' .
         'timeout ' .
         'disable:0,1 ' .
+        'disableHistory:0,1 ' .
         'deviceList:textField-long ' .
         'controlList:textField-long ' .
         'deviceRoom:textField-long ' .
@@ -103,7 +107,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '2.3.0';
+    $hash->{VERSION}     = '2.4.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -256,8 +260,11 @@ sub Gemini_SendRequest {
         shift @{$hash->{CHAT}};
     }
 
+    my $disableHistory = AttrVal($name, 'disableHistory', 0);
+    my $contentsToSend = $disableHistory ? [ $hash->{CHAT}[-1] ] : $hash->{CHAT};
+
     my %requestBody = (
-        contents => $hash->{CHAT}
+        contents => $contentsToSend
     );
 
     my $systemPrompt = AttrVal($name, 'systemPrompt', '');
@@ -591,8 +598,11 @@ sub Gemini_SendControl {
         $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
     }
 
+    my $disableHistory = AttrVal($name, 'disableHistory', 0);
+    my $contentsToSend = $disableHistory ? [ $hash->{CHAT}[-1] ] : $hash->{CHAT};
+
     my %requestBody = (
-        contents => $hash->{CHAT},
+        contents => $contentsToSend,
         tools    => Gemini_GetControlTools()
     );
 
@@ -823,8 +833,17 @@ sub Gemini_SendFunctionResult {
     my $model   = AttrVal($name, 'model',    'gemini-3.1-flash-lite-preview');
     my $timeout = AttrVal($name, 'timeout',  30);
 
+    my $disableHistory = AttrVal($name, 'disableHistory', 0);
+    my $contentsToSend;
+    if ($disableHistory) {
+        my $startIdx = $hash->{CONTROL_START_IDX} // 0;
+        $contentsToSend = [ @{$hash->{CHAT}}[$startIdx..$#{$hash->{CHAT}}] ];
+    } else {
+        $contentsToSend = $hash->{CHAT};
+    }
+
     my %requestBody = (
-        contents => $hash->{CHAT},
+        contents => $contentsToSend,
         tools    => Gemini_GetControlTools()
     );
 
@@ -892,6 +911,9 @@ sub Gemini_SendFunctionResult {
     <li><b>systemPrompt</b> - Optionaler System-Prompt</li>
     <li><b>timeout</b> - HTTP Timeout in Sekunden (Standard: 30)</li>
     <li><b>disable</b> - Modul deaktivieren</li>
+    <li><b>disableHistory</b> - Chat-Verlauf deaktivieren (0/1). Bei 1 wird jede Anfrage
+      ohne vorherigen Chat-Verlauf gesendet und als eigenstaendiges Gespraech behandelt.
+      Der interne Verlauf bleibt erhalten (fuer resetChat), wird aber nicht an die API uebermittelt.</li>
     <li><b>deviceList</b> - Komma-getrennte Geraete liste fuer askAboutDevices</li>
     <li><b>deviceRoom</b> - Komma-getrennte Raumliste; alle Geraete mit passendem
       FHEM-room-Attribut werden automatisch fuer askAboutDevices verwendet.
