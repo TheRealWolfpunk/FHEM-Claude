@@ -40,6 +40,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.6.0 - 2026-04-10  Fix: getAllSets() statt direktem Hash-Zugriff fuer set-Befehle,
+#                          damit auch dynamisch berechnete set-Listen korrekt
+#                          an Gemini uebermittelt werden (statt "unbekannt")
 # 2.5.0 - 2026-04-10  Fix: Chat-Verlauf-Trimming stellt sicher, dass der Verlauf
 #                          immer mit einem user-Turn beginnt, um API-Fehler 400
 #                          ("function call turn must come after user turn") zu vermeiden
