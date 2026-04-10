@@ -40,6 +40,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.6.0 - 2026-04-10  Fix: getAllSets() statt direktem Hash-Zugriff fuer set-Befehle,
+#                          damit auch dynamisch berechnete set-Listen korrekt
+#                          an Gemini uebermittelt werden (statt "unbekannt")
 # 2.5.0 - 2026-04-10  Fix: Chat-Verlauf-Trimming stellt sicher, dass der Verlauf
 #                          immer mit einem user-Turn beginnt, um API-Fehler 400
 #                          ("function call turn must come after user turn") zu vermeiden
@@ -504,13 +507,8 @@ sub Gemini_BuildControlContext {
         next unless exists $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
 
-        # Set-Befehle ermitteln
-        my $setListRaw = '';
-        if (defined $main::defs{$devName}{'.setList'}) {
-            $setListRaw = $main::defs{$devName}{'.setList'};
-        } elsif (defined $main::defs{$devName}{'SetList'}) {
-            $setListRaw = $main::defs{$devName}{'SetList'};
-        }
+        # Set-Befehle ermitteln (getAllSets liefert auch dynamisch berechnete Befehle)
+        my $setListRaw = main::getAllSets($devName) // '';
 
         # Nur Befehlsnamen extrahieren (ohne Typ-Definitionen wie :slider,0,1,100)
         my @cmds;
