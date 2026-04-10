@@ -478,12 +478,12 @@ sub Gemini_MarkdownToHTML {
     # Inline-Code (`code`) → <code>code</code>
     $text =~ s/`(.+?)`/<code>$1<\/code>/gs;
 
-    # Überschriften (# bis ######)
-    $text =~ s/^######\s+(.+)$/<h8>$1<\/h8>/gm;
-    $text =~ s/^#####\s+(.+)$/<h7>$1<\/h7>/gm;
-    $text =~ s/^####\s+(.+)$/<h6>$1<\/h6>/gm;
-    $text =~ s/^###\s+(.+)$/<h5>$1<\/h5>/gm;
-    $text =~ s/^##\s+(.+)$/<h4>$1<\/h4>/gm;
+    # Überschriften (# bis ######, gekappt bei <h6>)
+    $text =~ s/^#{6}\s+(.+)$/<h6>$1<\/h6>/gm;
+    $text =~ s/^#{5}\s+(.+)$/<h6>$1<\/h6>/gm;
+    $text =~ s/^#{4}\s+(.+)$/<h6>$1<\/h6>/gm;
+    $text =~ s/^#{3}\s+(.+)$/<h5>$1<\/h5>/gm;
+    $text =~ s/^#{2}\s+(.+)$/<h4>$1<\/h4>/gm;
     $text =~ s/^#\s+(.+)$/<h3>$1<\/h3>/gm;
 
     # Zusammenhängende Listenblöcke (- oder * am Zeilenanfang) → <ul><li>...</li></ul>
@@ -493,7 +493,7 @@ sub Gemini_MarkdownToHTML {
     $text =~ s/^(?:---|\*\*\*)\s*$/<hr>/gm;
 
     # Zeilenumbrüche → <br> (außerhalb von Block-Elementen)
-    $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[3-8]|\/h[3-8]|pre|\/pre|hr))/<br>\n/g;
+    $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[3-6]|\/h[3-6]|pre|\/pre|hr))/<br>\n/g;
 
     return $text;
 }
