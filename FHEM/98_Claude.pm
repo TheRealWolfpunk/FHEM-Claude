@@ -33,6 +33,7 @@
 #   response           - Letzte Antwort von Claude (Roh-Markdown)
 #   responsePlain      - Letzte Antwort, Markdown bereinigt (reiner Text)
 #   responseHTML       - Letzte Antwort, Markdown in HTML konvertiert
+#   responseSSML       - Letzte Antwort, fuer Sprachausgabe bereinigt (SSML)
 #   state              - Aktueller Status
 #   lastError          - Letzter Fehler
 #   chatHistory        - Anzahl der Nachrichten im Verlauf
@@ -42,6 +43,7 @@
 ##############################################################################
 
 # Versionshistorie:
+# 1.0.3 - 2026-04-11  Neu: Reading responseSSML fuer Sprachausgabe ergaenzt
 # 1.0.2 - 2026-04-11  Perf: Tokenverbrauch fuer Hausautomation reduziert;
 #                          askAboutDevices-, control- und get_device_state-
 #                          Kontexte auf kompakte, aber praxistaugliche
@@ -63,7 +65,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.0.2';
+my $MODULE_VERSION = '1.0.3';
 
 sub Claude_Initialize {
     my ($hash) = @_;
@@ -110,6 +112,7 @@ sub Claude_Define {
     readingsSingleUpdate($hash, 'response',          '-',           0);
     readingsSingleUpdate($hash, 'responsePlain',     '-',           0);
     readingsSingleUpdate($hash, 'responseHTML',      '-',           0);
+    readingsSingleUpdate($hash, 'responseSSML',      '-',           0);
     readingsSingleUpdate($hash, 'chatHistory',       0,             0);
     readingsSingleUpdate($hash, 'lastError',         '-',           0);
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
@@ -454,10 +457,14 @@ sub Claude_HandleResponse {
     my $responseHTML = Claude_MarkdownToHTML($responseUnicode);
     utf8::encode($responseHTML) if utf8::is_utf8($responseHTML);
 
+    my $responseSSML = Claude_MarkdownToSSML($responseUnicode);
+    utf8::encode($responseSSML) if utf8::is_utf8($responseSSML);
+
     readingsBeginUpdate($hash);
     readingsBulkUpdate($hash, 'response',      $responseForReading);
     readingsBulkUpdate($hash, 'responsePlain', $responsePlain);
     readingsBulkUpdate($hash, 'responseHTML',  $responseHTML);
+    readingsBulkUpdate($hash, 'responseSSML',  $responseSSML);
     readingsBulkUpdate($hash, 'chatHistory',   scalar(@{$hash->{CHAT}}));
     readingsBulkUpdate($hash, 'state',         'ok');
     readingsBulkUpdate($hash, 'lastError',     '-');
@@ -512,6 +519,76 @@ sub Claude_MarkdownToHTML {
     $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[3-6]|\/h[3-6]|pre|\/pre|hr))/<br>\n/g;
 
     return $text;
+}
+
+##############################################################################
+# Hilfsfunktion: Antwort fuer Sprachausgabe in SSML umwandeln
+##############################################################################
+sub Claude_MarkdownToSSML {
+    my ($text) = @_;
+    return '' unless defined $text;
+
+    $text =~ s/\r\n/\n/g;
+    $text =~ s/\r/\n/g;
+    $text =~ s/\\n/\n/g;
+    $text =~ s/\n\s*\n+/\n/g;
+
+    $text =~ s/[\x{1F300}-\x{1FAFF}]//g;
+    $text =~ s/[\x{2600}-\x{27BF}]//g;
+    $text =~ s/[\x{FE0F}\x{200D}]//g;
+    $text =~ s/\s+\)/)/g;
+
+    $text =~ s/\*\*([^*]*)\*\*/$1/g;
+    $text =~ s/\*([^*]*)\*/$1/g;
+    $text =~ s/__([^_]*)__/$1/g;
+    $text =~ s/_([^_]*)_/$1/g;
+    $text =~ s/`[^`]*`//g;
+    $text =~ s/#{1,6}\s*//g;
+
+    my @lines = split(/\n/, $text);
+    my @result;
+
+    foreach my $line (@lines) {
+        $line =~ s/^\s*[-*•]\s+//;
+        $line =~ s/^\s+|\s+$//g;
+        next unless length($line);
+        $line =~ s/^(\d+)\.\s+/$1. /;
+        $line =~ s/:$/./;
+        $line .= '.' unless $line =~ /[.!?,;]$/ || $line =~ /\d+\.\d+$/;
+        push @result, $line;
+    }
+
+    $text = join(' ', @result);
+    $text =~ s/\n/ /g;
+    $text =~ s/\s{2,}/ /g;
+    $text =~ s/\.\s*\././g;
+    $text =~ s/^\s+|\s+$//g;
+    $text =~ s/&/ und /g;
+    $text =~ s/\// und /g;
+    $text =~ s/\s{2,}/ /g;
+
+    my @sentences = split(/(?<=[.!?])\s+/, $text);
+    my @output;
+
+    foreach my $sentence (@sentences) {
+        $sentence =~ s/^\s+|\s+$//g;
+        next unless length($sentence);
+
+        if ($sentence =~ /^[^.]+:\s*\d+\s+\w+/) {
+            $sentence =~ s/:\s*(.+)$/. $1/;
+            $sentence .= '.' unless $sentence =~ /[.!?]$/;
+        }
+
+        push @output, $sentence;
+    }
+
+    $text = join(' ', @output);
+    $text =~ s/\s+,/,/g;
+    $text =~ s/:\././g;
+    $text =~ s/\s{2,}/ /g;
+    $text =~ s/^\s+|\s+$//g;
+
+    return "<speak>$text</speak>";
 }
 
 ##############################################################################
@@ -1099,10 +1176,14 @@ sub Claude_HandleControlResponse {
     my $responseHTML = Claude_MarkdownToHTML($responseUnicode);
     utf8::encode($responseHTML) if utf8::is_utf8($responseHTML);
 
+    my $responseSSML = Claude_MarkdownToSSML($responseUnicode);
+    utf8::encode($responseSSML) if utf8::is_utf8($responseSSML);
+
     readingsBeginUpdate($hash);
     readingsBulkUpdate($hash, 'response',      $responseForReading);
     readingsBulkUpdate($hash, 'responsePlain', $responsePlain);
     readingsBulkUpdate($hash, 'responseHTML',  $responseHTML);
+    readingsBulkUpdate($hash, 'responseSSML',  $responseSSML);
     readingsBulkUpdate($hash, 'chatHistory',   scalar(@{$hash->{CHAT}}));
     readingsBulkUpdate($hash, 'state',         'ok');
     readingsBulkUpdate($hash, 'lastError',     '-');
@@ -1242,6 +1323,7 @@ sub Claude_SendToolResults {
     <li><b>response</b> - Letzte Textantwort von Claude (Roh-Markdown)</li>
     <li><b>responsePlain</b> - Letzte Textantwort, Markdown-Syntax entfernt (reiner Text, ideal fuer Sprachausgabe, Telegram, Notify)</li>
     <li><b>responseHTML</b> - Letzte Textantwort, Markdown in HTML konvertiert (ideal fuer Tablet-UI, Web-Frontends)</li>
+    <li><b>responseSSML</b> - Letzte Textantwort, fuer Sprachausgabe bereinigt und als SSML aufbereitet</li>
     <li><b>state</b> - Aktueller Status</li>
     <li><b>lastError</b> - Letzter Fehler</li>
     <li><b>chatHistory</b> - Anzahl der Nachrichten im Chat-Verlauf</li>
