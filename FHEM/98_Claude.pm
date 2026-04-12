@@ -59,6 +59,8 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
+my $MODULE_VERSION = '1.0.1';
+
 sub Claude_Initialize {
     my ($hash) = @_;
 
@@ -80,6 +82,12 @@ sub Claude_Initialize {
         'systemPrompt:textField-long ' .
         $readingFnAttributes;
 
+    foreach my $existingDeviceName (keys %defs) {
+        if ($defs{$existingDeviceName}{TYPE} eq 'Claude') {
+            $defs{$existingDeviceName}{VERSION} = $MODULE_VERSION;
+        }
+    }
+
     return undef;
 }
 
@@ -92,7 +100,7 @@ sub Claude_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];
-    $hash->{VERSION}     = '1.0.1';
+    $hash->{VERSION}     = $MODULE_VERSION;
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
