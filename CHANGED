@@ -1,5 +1,11 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on
+ - feature: 98_Claude.pm: Lokale Batch-Ausfuehrung fuer aufgeloeste
+                          Folgeanweisungen
+ - change:  98_Claude.pm: Token-Ersparnis durch Prompt-Caching und dynamische
+                          History
+ - bugfix:  98_Claude.pm: Stabilisierung von Tool-Sessions und Validierung
+                          leerer Requests
  - feature: 98_Claude.pm: Optimierungen zum Sparen von Tokens
  - feature: 98_Claude.pm: Reading responseSSML fuer Sprachausgabe ergänzt
  - change:  98_Claude.pm: Tokenverbrauch fuer Hausautomation reduziert
