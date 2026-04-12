@@ -13,9 +13,19 @@
 # Attribute:
 #   apiKey         - Anthropic API Key (Pflicht)
 #   model          - Claude Modell (Standard: claude-haiku-4-5)
-#   maxHistory     - Maximale Anzahl Chat-Nachrichten (Standard: 20)
-#   systemPrompt   - Optionaler System-Prompt
+#   maxHistory     - Maximale Anzahl Chat-Nachrichten (Standard: 10);
+#                    weniger Verlauf spart Tokens und ist guenstiger
+#   maxTokens      - Maximale Antwortlaenge (Default: 600 fuer ask, 300 fuer control);
+#                    kleinere Werte begrenzen Antwortkosten und sind meist guenstiger
+#   systemPrompt   - Optionaler System-Prompt; laengere Prompts kosten mehr Tokens
+#                    und werden dadurch teurer
 #   timeout        - HTTP Timeout in Sekunden (Standard: 30)
+#   promptCaching  - Prompt-Caching via Claude API aktivieren (0/1);
+#                    wiederkehrende Prompts und Kontexte koennen dadurch guenstiger werden
+#   deviceContextMode  - Kontext fuer askAboutDevices: compact oder detailed;
+#                        compact ist guenstiger, detailed liefert mehr Infos, ist aber teurer
+#   controlContextMode - Kontext fuer control: compact oder detailed;
+#                        compact ist guenstiger, detailed liefert mehr Infos, ist aber teurer
 #   deviceList     - Komma-getrennte Liste der Geraete fuer askAboutDevices
 #   deviceRoom     - Komma-getrennte Raumliste; Geraete mit passendem room-Attribut
 #                    werden automatisch fuer askAboutDevices verwendet
@@ -43,6 +53,11 @@
 ##############################################################################
 
 # Versionshistorie:
+# 1.0.4 - 2026-04-12  Perf: Tokenverbrauch weiter reduziert; kleinere Defaults fuer
+#                          maxHistory/maxTokens, optionales Prompt-Caching,
+#                          kompaktere Tool-Definitionen, sowie optionale
+#                          sparsame/ausfuehrliche Kontexte fuer askAboutDevices
+#                          und control
 # 1.0.3 - 2026-04-11  Neu: Reading responseSSML fuer Sprachausgabe ergaenzt
 # 1.0.2 - 2026-04-11  Perf: Tokenverbrauch fuer Hausautomation reduziert;
 #                          askAboutDevices-, control- und get_device_state-
@@ -65,7 +80,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.0.3';
+my $MODULE_VERSION = '1.0.4';
 
 sub Claude_Initialize {
     my ($hash) = @_;
@@ -79,9 +94,13 @@ sub Claude_Initialize {
         'apiKey ' .
         'model ' .
         'maxHistory:5,10,20,50,100 ' .
+        'maxTokens ' .
         'timeout ' .
         'disable:0,1 ' .
         'disableHistory:0,1 ' .
+        'promptCaching:0,1 ' .
+        'deviceContextMode:compact,detailed ' .
+        'controlContextMode:compact,detailed ' .
         'deviceList:textField-long ' .
         'controlList:textField-long ' .
         'deviceRoom:textField-long ' .
@@ -131,6 +150,9 @@ sub Claude_Attr {
     my ($cmd, $name, $attr, $value) = @_;
     if ($attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
+    }
+    if ($attr eq 'maxTokens') {
+        return "maxTokens must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
     }
     return undef;
 }
@@ -295,7 +317,8 @@ sub Claude_SendRequest {
 
     my $model      = AttrVal($name, 'model',      'claude-haiku-4-5');
     my $timeout    = AttrVal($name, 'timeout',    30);
-    my $maxHistory = AttrVal($name, 'maxHistory', 20);
+    my $maxHistory = int(AttrVal($name, 'maxHistory', 10));
+    my $maxTokens  = int(AttrVal($name, 'maxTokens',  600));
 
     Log3 $name, 4, "Claude ($name): Verwende Modell $model";
 
@@ -359,11 +382,12 @@ sub Claude_SendRequest {
     # in getrennten Feldern.
     my %requestBody = (
         model      => $model,
-        max_tokens => 4096,
+        max_tokens => $maxTokens,
         messages   => $messagesToSend
     );
 
     $requestBody{system} = $fullSystem if $fullSystem ne '';
+    $requestBody{cache_control} = { type => 'ephemeral' } if AttrVal($name, 'promptCaching', 0);
 
     my $jsonBody = eval { encode_json(\%requestBody) };
     if ($@) {
@@ -559,8 +583,7 @@ sub Claude_MarkdownToSSML {
         $line =~ s/^\s+|\s+$//g;
         next unless length($line);
         $line =~ s/^(\d+)\.\s+/$1. /;
-        $line =~ s/:$/./;
-        $line .= '.' unless $line =~ /[.!?,;]$/ || $line =~ /\d+\.\d+$/;
+        $line .= '.' unless $line =~ /[.!?,;:]$/ || $line =~ /\d+\.\d+$/;
         push @result, $line;
     }
 
@@ -675,6 +698,7 @@ sub Claude_BuildDeviceContext {
         measured-temp
         mode
     );
+    my $contextMode = AttrVal($name, 'deviceContextMode', 'detailed');
 
     my $context = "Aktueller Status der Smart-Home Geraete:\n";
 
@@ -685,17 +709,21 @@ sub Claude_BuildDeviceContext {
 
         Log3 $name, 4, "Claude ($name): Alias " . $alias;
 
-        $context .= "\nGeraet: $alias (intern: $devName)\n";
-        $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
+        $context .= "\nGeraet: $alias";
+        $context .= " (intern: $devName)" if $contextMode ne 'compact';
+        $context .= "\n";
+        $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n" if $contextMode ne 'compact';
         $context .= "  Status: " . ReadingsVal($devName, 'state', 'unbekannt') . "\n";
 
         if (exists $dev->{READINGS}) {
             my @compactReadings;
+            my $maxReadings = $contextMode eq 'compact' ? 3 : scalar(@importantReadings);
             for my $reading (@importantReadings) {
                 next unless exists $dev->{READINGS}{$reading};
                 next if $reading eq 'state';
                 my $val = $dev->{READINGS}{$reading}{VAL} // '';
                 push @compactReadings, "    $reading: $val";
+                last if @compactReadings >= $maxReadings;
             }
 
             if (@compactReadings) {
@@ -704,9 +732,11 @@ sub Claude_BuildDeviceContext {
             }
         }
 
-        for my $attrName (qw(room group alias)) {
-            my $attrVal = AttrVal($devName, $attrName, '');
-            $context .= "  $attrName: $attrVal\n" if $attrVal;
+        if ($contextMode ne 'compact') {
+            for my $attrName (qw(room group alias)) {
+                my $attrVal = AttrVal($devName, $attrName, '');
+                $context .= "  $attrName: $attrVal\n" if $attrVal;
+            }
         }
 
         Log3 $name, 4, "Claude ($name): " . $alias . ": " . $context;
@@ -732,6 +762,7 @@ sub Claude_BuildControlContext {
     my %preferred = map { $_ => 1 } @preferred;
     my @blacklist = qw(attrTemplate associate rename intervals off-till off-till-overnight on-till on-till-overnight on-for-timer off-for-timer);
     my %blackset  = map { $_ => 1 } @blacklist;
+    my $contextMode = AttrVal($name, 'controlContextMode', 'detailed');
 
     my $context = "Verfuegbare Geraete zum Steuern:\n";
     for my $devName (@devices) {
@@ -750,7 +781,7 @@ sub Claude_BuildControlContext {
 
             if ($preferred{$cmdName}) {
                 push @preferredCmds, $cmdName;
-            } elsif (@otherCmds < 3) {
+            } elsif ($contextMode ne 'compact' && @otherCmds < 3) {
                 push @otherCmds, $cmdName;
             }
         }
@@ -760,7 +791,11 @@ sub Claude_BuildControlContext {
         @cmds = grep { !$seen{$_}++ } @cmds;
         my $cmdsStr = @cmds ? join(', ', @cmds) : 'unbekannt';
 
-        $context .= "  $alias (intern: $devName, Status: $state) -- Befehle: $cmdsStr\n";
+        if ($contextMode eq 'compact') {
+            $context .= "  $alias (intern: $devName, Status: $state)\n";
+        } else {
+            $context .= "  $alias (intern: $devName, Status: $state) -- Befehle: $cmdsStr\n";
+        }
     }
 
     return $context;
@@ -773,23 +808,23 @@ sub Claude_GetControlTools {
     return [
         {
             name        => 'set_device',
-            description => 'Fuehrt einen FHEM set-Befehl auf einem Geraet aus, z.B. on, off oder einen numerischen Wert',
+            description => 'Fuehrt set auf einem FHEM-Geraet aus',
             input_schema => {
                 type       => 'object',
                 properties => {
-                    device  => { type => 'string', description => 'FHEM Geraetename (intern)' },
-                    command => { type => 'string', description => 'Der set-Befehl, z.B. on, off, 21' }
+                    device  => { type => 'string', description => 'Interner Geraetename' },
+                    command => { type => 'string', description => 'set-Befehl oder Wert' }
                 },
                 required => ['device', 'command']
             }
         },
         {
             name        => 'get_device_state',
-            description => 'Liest den aktuellen Status und alle Readings eines FHEM-Geraets',
+            description => 'Liest Status und wichtige Readings eines FHEM-Geraets',
             input_schema => {
                 type       => 'object',
                 properties => {
-                    device => { type => 'string', description => 'FHEM Geraetename (intern)' }
+                    device => { type => 'string', description => 'Interner Geraetename' }
                 },
                 required => ['device']
             }
@@ -892,7 +927,8 @@ sub Claude_SendControl {
 
     my $model      = AttrVal($name, 'model',      'claude-haiku-4-5');
     my $timeout    = AttrVal($name, 'timeout',    30);
-    my $maxHistory = AttrVal($name, 'maxHistory', 20);
+    my $maxHistory = int(AttrVal($name, 'maxHistory', 10));
+    my $maxTokens  = int(AttrVal($name, 'maxTokens',  300));
 
     Log3 $name, 4, "Claude ($name): Verwende Modell $model";
 
@@ -928,12 +964,13 @@ sub Claude_SendControl {
     # fuer set_device und get_device_state mitgeschickt
     my %requestBody = (
         model      => $model,
-        max_tokens => 4096,
+        max_tokens => $maxTokens,
         messages   => $messagesToSend,
         tools      => Claude_GetControlTools()
     );
 
     $requestBody{system} = $fullSystem if $fullSystem ne '';
+    $requestBody{cache_control} = { type => 'ephemeral' } if AttrVal($name, 'promptCaching', 0);
 
     my $jsonBody = eval { encode_json(\%requestBody) };
     if ($@) {
@@ -1219,9 +1256,10 @@ sub Claude_SendToolResults {
         content => $toolResults
     };
 
-    my $apiKey  = AttrVal($name, 'apiKey',  '');
-    my $model   = AttrVal($name, 'model',   'claude-haiku-4-5');
-    my $timeout = AttrVal($name, 'timeout', 30);
+    my $apiKey    = AttrVal($name, 'apiKey',    '');
+    my $model     = AttrVal($name, 'model',     'claude-haiku-4-5');
+    my $timeout   = AttrVal($name, 'timeout',   30);
+    my $maxTokens = int(AttrVal($name, 'maxTokens', 300));
 
     Log3 $name, 4, "Claude ($name): Verwende Modell $model";
 
@@ -1244,12 +1282,13 @@ sub Claude_SendToolResults {
 
     my %requestBody = (
         model      => $model,
-        max_tokens => 4096,
+        max_tokens => $maxTokens,
         messages   => $messagesToSend,
         tools      => Claude_GetControlTools()
     );
 
     $requestBody{system} = $fullSystem if $fullSystem ne '';
+    $requestBody{cache_control} = { type => 'ephemeral' } if AttrVal($name, 'promptCaching', 0);
 
     my $jsonBody = eval { encode_json(\%requestBody) };
     if ($@) {
@@ -1296,13 +1335,40 @@ sub Claude_SendToolResults {
   <ul>
     <li><b>apiKey</b> - Anthropic API Key (Pflicht)</li>
     <li><b>model</b> - Claude Modell (Standard: claude-haiku-4-5)</li>
-    <li><b>maxHistory</b> - Max. Chat-Nachrichten (Standard: 20)</li>
-    <li><b>systemPrompt</b> - Optionaler System-Prompt</li>
+    <li><b>maxHistory</b> - Max. Chat-Nachrichten (Standard: 10). Ein kleinerer Wert
+      spart Input-Tokens und ist guenstiger, weil weniger Verlauf bei jeder Anfrage
+      erneut an Claude gesendet wird.</li>
+    <li><b>maxTokens</b> - Maximale Antwortlaenge. Default: 600 fuer normale Anfragen,
+      300 fuer control/tool use. Ein kleinerer Wert begrenzt die Antwortkosten und ist
+      guenstiger, kann Antworten aber kuerzer ausfallen lassen.</li>
+    <li><b>systemPrompt</b> - Optionaler System-Prompt. Je laenger der Prompt ist,
+      desto mehr Input-Tokens fallen bei jeder Anfrage an und desto teurer wird es.</li>
     <li><b>timeout</b> - HTTP Timeout in Sekunden (Standard: 30)</li>
     <li><b>disable</b> - Modul deaktivieren</li>
     <li><b>disableHistory</b> - Chat-Verlauf deaktivieren (0/1). Bei 1 wird jede Anfrage
       ohne vorherigen Chat-Verlauf gesendet und als eigenstaendiges Gespraech behandelt.
-      Der interne Verlauf bleibt erhalten (fuer resetChat), wird aber nicht an die API uebermittelt.</li>
+      Der interne Verlauf bleibt erhalten (fuer resetChat), wird aber nicht an die API uebermittelt.
+      Das spart Input-Tokens und ist oft deutlich guenstiger, kann aber den
+      Gespraechskontext verschlechtern.</li>
+    <li><b>promptCaching</b> - Aktiviert Prompt-Caching in der Claude API (0/1).
+      Das ist besonders sinnvoll bei wiederkehrenden Prompts, Geraetekontexten oder
+      aehnlichen Anfragen und kann die Kosten deutlich senken.</li>
+    <li><b>deviceContextMode</b> - Steuert, wie viele Geraeteinformationen bei
+      <b>askAboutDevices</b> an Claude gesendet werden.<br>
+      <code>compact</code>: sendet pro Geraet nur den Alias, den aktuellen Status
+      und bis zu 3 wichtige Readings. Das spart Tokens, ist guenstiger und fuer
+      einfache Zusammenfassungen meist ausreichend.<br>
+      <code>detailed</code>: sendet zusaetzlich den internen Geraetenamen, den Typ
+      sowie weitere Attribute wie <code>room</code>, <code>group</code> und
+      <code>alias</code>. Das ist ausfuehrlicher, aber auch teurer.</li>
+    <li><b>controlContextMode</b> - Steuert, wie viele Informationen fuer den
+      <b>control</b>-Befehl an Claude gesendet werden.<br>
+      <code>compact</code>: sendet pro Geraet nur Alias, internen Namen und
+      aktuellen Status. Das spart Tokens, ist guenstiger und reicht oft fuer
+      einfache Schaltbefehle.<br>
+      <code>detailed</code>: sendet zusaetzlich eine kompakte Liste typischer
+      verfuegbarer Befehle mit. Das hilft Claude bei komplexeren
+      Steueranweisungen, ist aber teurer.</li>
     <li><b>deviceList</b> - Komma-getrennte Geraeteliste fuer askAboutDevices</li>
     <li><b>deviceRoom</b> - Komma-getrennte Raumliste; alle Geraete mit passendem
       FHEM-room-Attribut werden automatisch fuer askAboutDevices verwendet.
@@ -1312,7 +1378,8 @@ sub Claude_SendToolResults {
       Tool Use steuern darf (Pflicht fuer den control-Befehl).
       Alias-Namen und verfuegbare set-Befehle der Geraete werden automatisch
       an Claude uebermittelt, sodass Sprachbefehle mit Alias-Namen und
-      passende Befehle automatisch erkannt werden.
+      passende Befehle automatisch erkannt werden. Mehr Geraete und mehr
+      Kontext bedeuten in der Regel auch mehr Input-Tokens und damit hoehere Kosten.
       Beispiel: <code>attr ClaudeAI controlList Lampe1,Heizung,Rolladen1</code></li>
   </ul><br>
 

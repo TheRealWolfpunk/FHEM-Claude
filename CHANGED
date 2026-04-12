@@ -1,6 +1,9 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on
- - feature: 98_Claude.pm: Reading responseSSML fuer Sprachausgabe ergaenzt
+ - feature: 98_Claude.pm: Optimierungen zum Sparen von Tokens
+ - feature: 98_Claude.pm: Reading responseSSML fuer Sprachausgabe ergänzt
  - change:  98_Claude.pm: Tokenverbrauch fuer Hausautomation reduziert
- - bugfix:  98_Claude.pm: Tool-Use/Tool-Result-Verarbeitung fuer Anthropic korrigiert
- - change:  98_Claude.pm: Forked from 98_Gemini.pm; Umstellung von Google Gemini API auf Anthropic Claude API
+ - bugfix:  98_Claude.pm: Tool-Use/Tool-Result-Verarbeitung für Anthropic
+                          korrigiert
+ - change:  98_Claude.pm: Fork von 98_Gemini.pm; Umstellung von der
+                          Google Gemini API auf Anthropic Claude API
