@@ -297,6 +297,8 @@ sub Claude_SendRequest {
     my $timeout    = AttrVal($name, 'timeout',    30);
     my $maxHistory = AttrVal($name, 'maxHistory', 20);
 
+    Log3 $name, 4, "Claude ($name): Verwende Modell $model";
+
     # Claude erwartet Inhalte als content-Array mit Text- und optionalen Bild-Bloecken
     my @content;
 
@@ -413,6 +415,10 @@ sub Claude_HandleResponse {
         Log3 $name, 1, "Claude ($name): JSON Parse Fehler: $@";
         pop @{$hash->{CHAT}};
         return;
+    }
+
+    if (exists $result->{model}) {
+        Log3 $name, 4, "Claude ($name): API meldet Modell " . $result->{model};
     }
 
     if (exists $result->{error}) {
@@ -677,7 +683,7 @@ sub Claude_BuildDeviceContext {
         my $dev   = $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
 
-        Log3 $name, 3, "Claude ($name): Alias " . $alias;
+        Log3 $name, 4, "Claude ($name): Alias " . $alias;
 
         $context .= "\nGeraet: $alias (intern: $devName)\n";
         $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
@@ -703,7 +709,7 @@ sub Claude_BuildDeviceContext {
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
 
-        Log3 $name, 3, "Claude ($name): " . $alias . ": " . $context;
+        Log3 $name, 4, "Claude ($name): " . $alias . ": " . $context;
     }
 
     return $context;
@@ -888,6 +894,8 @@ sub Claude_SendControl {
     my $timeout    = AttrVal($name, 'timeout',    30);
     my $maxHistory = AttrVal($name, 'maxHistory', 20);
 
+    Log3 $name, 4, "Claude ($name): Verwende Modell $model";
+
     # Startindex merken, damit bei Fehlern die gesamte Control-Session
     # sauber aus dem Verlauf entfernt werden kann
     $hash->{CONTROL_START_IDX} = scalar(@{$hash->{CHAT}});
@@ -978,6 +986,10 @@ sub Claude_HandleControlResponse {
         Log3 $name, 1, "Claude ($name): JSON Parse Fehler: $@";
         Claude_RollbackControlSession($hash);
         return;
+    }
+
+    if (exists $result->{model}) {
+        Log3 $name, 4, "Claude ($name): API meldet Modell " . $result->{model};
     }
 
     if (exists $result->{error}) {
@@ -1210,6 +1222,8 @@ sub Claude_SendToolResults {
     my $apiKey  = AttrVal($name, 'apiKey',  '');
     my $model   = AttrVal($name, 'model',   'claude-haiku-4-5');
     my $timeout = AttrVal($name, 'timeout', 30);
+
+    Log3 $name, 4, "Claude ($name): Verwende Modell $model";
 
     my $disableHistory = AttrVal($name, 'disableHistory', 0);
     my $messagesToSend;
