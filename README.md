@@ -200,19 +200,19 @@ get ClaudeAI chatHistory
 |---|---|---|
 | `apiKey` | Anthropic Claude API Key (Pflicht) | – |
 | `model` | Claude Modell | `claude-haiku-4-5` |
-| `maxHistory` | Maximale Anzahl Chat-Nachrichten | `10` |
-| `maxTokens` | Maximale Antwortlänge | `600` |
+| `maxHistory` | Maximale Anzahl Chat-Nachrichten; weniger Verlauf hält den mitgesendeten Kontext kleiner | `10` |
+| `maxTokens` | Maximale Antwortlänge; ohne gesetztes Attribut werden je nach Anfrageart Fallback-Werte verwendet: `600` für `ask`/`askAboutDevices`, `300` für `control`/Tool Use | – |
 | `timeout` | HTTP Timeout in Sekunden | `30` |
 | `disable` | Modul deaktivieren (`0/1`) | `0` |
-| `disableHistory` | Chat-Verlauf deaktivieren (`0/1`); jede Anfrage wird ohne vorherigen Verlauf an die API gesendet. Der interne Verlauf bleibt erhalten, wird aber nicht übertragen. Das kann bei vielen Anwendungsfällen Tokens sparen, reduziert aber den Gesprächskontext. | `0` |
-| `promptCaching` | Aktiviert Prompt-Caching in der Claude API (`0/1`); kann bei wiederkehrenden Prompts und ähnlichen Kontexten zusätzliche Kosten reduzieren | `0` |
-| `deviceContextMode` | Kontextumfang für `askAboutDevices`: `compact` oder `detailed`; `compact` hält den gesendeten Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
-| `controlContextMode` | Kontextumfang für `control`: `compact` oder `detailed`; `compact` hält den gesendeten Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
-| `systemPrompt` | Optionaler System-Prompt; längere Prompts erhöhen den mitgesendeten Kontext pro Anfrage | – |
+| `disableHistory` | Chat-Verlauf deaktivieren (`0/1`); jede Anfrage wird als eigenständiges Gespräch behandelt | `0` |
+| `promptCaching` | Prompt-Caching via Claude API aktivieren (`0/1`); wiederkehrende Prompts und Kontexte können dadurch effizienter verarbeitet werden | `0` |
+| `deviceContextMode` | Kontext für `askAboutDevices`: `compact` oder `detailed`; `compact` hält den Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
+| `controlContextMode` | Kontext für `control`: `compact` oder `detailed`; `compact` hält den Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
+| `localControlResolver` | Aktiviert den lokalen Resolver für den Claude-Hybridbetrieb (`0/1`); einfache und eindeutige `control`-Befehle werden direkt in FHEM ausgeführt, komplexere Fälle laufen weiter über Claude | `1` |
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
-| `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
-| `localControlResolver` | Aktiviert den lokalen Resolver für einfache und eindeutige `control`-Befehle im Hybridbetrieb (`0/1`); viele Standardbefehle können dadurch direkt lokal ausgeführt werden, was API-Aufrufe sowie laufende Kosten reduziert | `1` |
-| `controlList` | Komma-getrennte Liste der Geräte, die lokal bzw. über Claude gesteuert werden dürfen (Pflicht für `control`) | – |
+| `controlList` | Komma-getrennte Liste der Geräte, die Claude steuern darf (Pflicht für `control`) | – |
+| `deviceRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch für `askAboutDevices` verwendet | – |
+| `systemPrompt` | Optionaler System-Prompt; längere Prompts erhöhen den mitgesendeten Kontext pro Anfrage | – |
 
 ## Readings
 
