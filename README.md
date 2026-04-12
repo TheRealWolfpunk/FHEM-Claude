@@ -1,19 +1,25 @@
 # FHEM-Claude
 
-FHEM-Modul zur Anbindung der Anthropic Claude AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl (Function Calling) und mehr – direkt aus FHEM heraus.
+Version: 1.1.0
+
+FHEM-Modul zur Anbindung der Anthropic Claude AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl und mehr – direkt aus FHEM heraus.
 Dieses Modul ist ein Fork von https://github.com/ahlers2mi/FHEM-Gemini.
 
 ### API-Kosten & Credits
 
-Dieses Modul nutzt das Prepaid-System von Anthropic. Standardmäßig ist das Modell **claude-haiku-4-5** hinterlegt, da es für Hausautomations-Befehle das effizienteste Preis-Leistungs-Verhältnis bietet.
+Dieses Modul nutzt das Prepaid-System von Anthropic. Standardmäßig ist das Modell **claude-haiku-4-5** hinterlegt, weil es aktuell das kostengünstigste Claude-Modell ist und für typische Hausautomations-Anfragen in der Regel ein sehr passendes Verhältnis aus Leistung und laufenden Kosten bietet.
 
-Pro 1.000 durchschnittlichen Interaktionen (Statusabfragen oder Schaltbefehle) fallen Kosten von etwa **1,50 $** an. Ein Startguthaben von **5 $** reicht somit für über 3.000 Anfragen. Bei einer täglichen Nutzung von 10 Befehlen deckt dies einen Zeitraum von rund **10 Monaten** ab. Der tatsächliche Verbrauch variiert je nach Umfang deiner FHEM-Geräteliste und der Komplexität der Aufgaben.
+Pro 1.000 durchschnittlichen Interaktionen (Statusabfragen oder Schaltbefehle) fallen grob etwa **1,50 $** an. Ein Startguthaben von **5 $** reicht damit oft bereits für über 3.000 Anfragen. Bei einer täglichen Nutzung von 10 Befehlen kann das für rund **10 Monate** ausreichen. Der tatsächliche Verbrauch hängt vom Umfang deiner FHEM-Geräteliste, vom gesendeten Kontext und von der Komplexität der Aufgaben ab.
+
+Wichtig für die Praxis: Wenn der `localControlResolver` aktiv ist, werden viele einfache und eindeutige Steuerbefehle direkt lokal in FHEM ausgeführt. Für diese Fälle ist kein zusätzlicher Claude-API-Aufruf nötig. Das spart im Alltag Tokens und damit laufende Kosten spürbar, sodass die Nutzung von Claude in FHEM für typische Steueraufgaben meist gut bezahlbar bleibt.
 
 ## Features
 
 - 💬 Textfragen an Claude stellen
 - 🖼️ Bilder analysieren (Dateipfad)
-- 🏠 Smart-Home-Geräte per Sprachbefehl steuern (Function Calling)
+- 🏠 Smart-Home-Geräte per Sprachbefehl steuern
+- ⚡ Claude-Hybridbetrieb (Lokalmodus) mit lokalem Resolver und Claude-Fallback
+- 🚀 Viele einfache Befehle direkt lokal ausführen, ohne zusätzlichen API-Call
 - 📋 Geräte-Status abfragen und zusammenfassen lassen
 - 🔄 Multi-Turn Chat-Verlauf (optional deaktivierbar)
 - 🛡️ Whitelist-basierte Gerätekontrolle (nur explizit freigegebene Geräte)
@@ -27,14 +33,14 @@ Pro 1.000 durchschnittlichen Interaktionen (Statusabfragen oder Schaltbefehle) f
 
 ### Erstmalig laden
 
-```
+```text
 update all https://raw.githubusercontent.com/TheRealWolfpunk/FHEM-Claude/main/controls_Claude.txt
 shutdown restart
 ```
 
 ### Für automatische Updates (zusammen mit `update all`)
 
-```
+```text
 update add https://raw.githubusercontent.com/TheRealWolfpunk/FHEM-Claude/main/controls_Claude.txt
 ```
 
@@ -44,23 +50,23 @@ Danach wird das Modul bei jedem `update all` automatisch aktualisiert.
 
 ### 1. Gerät definieren
 
-```
+```text
 define ClaudeAI Claude
 ```
 
 ### 2. API Key setzen
 
-```
+```text
 attr ClaudeAI apiKey DEIN-ANTHROPIC-CLAUDE-API-KEY
 ```
 
 ### 3. Optional: Modell wählen
 
-```
+```text
 attr ClaudeAI model claude-haiku-4-5
 ```
 
-Das ist bereits der Standard. Aus Kostengründen sollte man auch bei diesem Modell bleiben. Andere verfügbare Modelle: `claude-sonnet-4-6`, `claude-opus-4-6`
+Das ist bereits der Standard und für typische FHEM-Anwendungen meist eine sehr gute Wahl. Gleichzeitig ist **claude-haiku-4-5** aktuell das kostengünstigste verfügbare Claude-Modell. Andere verfügbare Modelle: `claude-sonnet-4-6`, `claude-opus-4-6`
 
 Eine aktuelle Übersicht der Modelle gibt es hier: https://platform.claude.com/docs/en/about-claude/models/overview
 
@@ -68,61 +74,123 @@ Eine aktuelle Übersicht der Modelle gibt es hier: https://platform.claude.com/d
 
 ### Textfrage stellen
 
-```
+```text
 set ClaudeAI ask Wie ist das Wetter morgen in Berlin?
 ```
 
 ### Bild analysieren
 
-```
+```text
 set ClaudeAI askWithImage /opt/fhem/www/snapshot.jpg Was ist auf diesem Bild zu sehen?
 ```
 
-Unterstützte Bildformate: `jpg`/`jpeg`, `png`, `gif`, `webp`, `bmp`, `heic`, `heif`.
+Unterstützte Bildformate: `jpg`/`jpeg`, `png`, `gif`, `webp`.
 
 ### Geräte-Status abfragen
 
-```
+```text
 attr ClaudeAI deviceList Lampe1,Heizung,Rolladen1
 set ClaudeAI askAboutDevices Welche Geräte sind gerade eingeschaltet?
 ```
 
 Alternativ alle Geräte eines Raums automatisch einbeziehen:
 
-```
+```text
 attr ClaudeAI deviceRoom Wohnzimmer,Küche
 set ClaudeAI askAboutDevices Gib mir eine Zusammenfassung aller Geräte.
 ```
 
 Mit dem Wildcard `*` werden **alle** in FHEM definierten Geräte einbezogen:
 
-```
+```text
 attr ClaudeAI deviceList *
 set ClaudeAI askAboutDevices Welche Geräte sind gerade aktiv?
 ```
 
-### Geräte per Sprachbefehl steuern (Function Calling)
+### Geräte per Sprachbefehl steuern
 
-```
+```text
 attr ClaudeAI controlList Lampe1,Heizung,Rolladen1
 set ClaudeAI control Mach die Wohnzimmerlampe an
 set ClaudeAI control Stelle die Heizung auf 21 Grad
 set ClaudeAI control Fahre alle Rolläden runter
 ```
 
-Claude löst Alias-Namen automatisch auf interne FHEM-Namen auf und wählt passende `set`-Befehle selbstständig aus. Nur Geräte aus `controlList` dürfen gesteuert werden.
+Nur Geräte aus `controlList` dürfen gesteuert werden.
 
-Claude kann im Rahmen eines `control`-Befehls auch den aktuellen Status eines Geräts selbstständig abfragen (z. B. um zu prüfen, ob eine Lampe bereits an ist), bevor es einen Steuerbefehl absetzt.
+## Claude-Hybridbetrieb (Lokalmodus) mit lokalem Resolver
+
+Wenn `localControlResolver` aktiviert ist, arbeitet das Modul im Hybridbetrieb:
+
+1. **Lokaler Resolver zuerst**
+   - viele einfache und eindeutige Steuerbefehle werden direkt in FHEM ausgeführt
+   - dafür wird in diesen Fällen kein zusätzlicher Claude-API-Call ausgelöst
+   - das spart im Alltag Tokens und damit laufende Kosten
+   - typische Standardschaltungen reagieren dadurch in der Praxis meist sehr direkt
+
+2. **Claude als Fallback für komplexere Sprache**
+   - komplexe, mehrdeutige oder freier formulierte Anweisungen werden weiterhin von Claude verarbeitet
+   - dadurch bleibt die Sprachsteuerung flexibel, ohne dass einfache Befehle immer über die API laufen müssen
+
+Der lokale Resolver übernimmt viele typische Standardschaltungen direkt in FHEM. Das spart im Alltag unnötige API-Aufrufe und hilft dabei, die laufenden Kosten für Claude in FHEM überschaubar zu halten. Für komplexere Sprache bleibt Claude im Hintergrund weiterhin verfügbar.
+
+Aktivieren oder deaktivieren:
+
+```text
+attr ClaudeAI localControlResolver 1
+```
+
+bzw.
+
+```text
+attr ClaudeAI localControlResolver 0
+```
+
+Bei `1` ist der lokale Resolver aktiv.  
+Bei `0` läuft jeder `control`-Befehl vollständig über Claude.
+
+### Typische Vorteile
+
+- viele einfache Standardbefehle werden direkt in FHEM ausgeführt
+- für lokal aufgelöste Befehle ist kein zusätzlicher API-Aufruf nötig
+- das spart im Alltag Tokens und damit laufende Kosten
+- Claude bleibt trotzdem für schwierigere Fälle verfügbar
+
+### Typische Grenzen
+
+- der lokale Resolver arbeitet bewusst konservativ
+- er übernimmt nur Befehle, die sicher und eindeutig auflösbar sind
+- freie oder sehr indirekte Sprache landet weiterhin beim Claude-Fallback
+- komplexe Semantik, Szenenlogik oder unklare Zielmengen werden lokal bewusst nicht „erraten“
+
+### Typische Fälle, die oft lokal funktionieren
+
+- Alias-Treffer auf genau ein Gerät  
+  z. B. `mach Stehlampe an`
+- eindeutige Kombinationen aus Raum + Gerätetyp + einfachem Schaltkommando  
+  z. B. `mach die Lampen im Wohnzimmer an`
+- referenzielle Folgeanweisungen auf die letzte Zielmenge  
+  z. B. `mach sie wieder aus`
+
+### Typische Fälle, die weiterhin über Claude laufen
+
+- komplexe oder freie Semantik  
+  z. B. `mach es gemütlicher`
+- nicht eindeutig auflösbare Sprache
+- komplexere Wert- oder Parameteranweisungen
+- Fälle, in denen zuerst Zustände geprüft oder interpretiert werden sollen
+
+Claude löst im Fallback Alias-Namen automatisch auf interne FHEM-Namen auf, kann passende `set`-Befehle wählen und bei Bedarf auch den Status eines Geräts selbstständig abfragen, bevor ein Steuerbefehl abgesetzt wird.
 
 ### Chat zurücksetzen
 
-```
+```text
 set ClaudeAI resetChat
 ```
 
 ### Chat-Verlauf anzeigen
 
-```
+```text
 get ClaudeAI chatHistory
 ```
 
@@ -132,14 +200,19 @@ get ClaudeAI chatHistory
 |---|---|---|
 | `apiKey` | Anthropic Claude API Key (Pflicht) | – |
 | `model` | Claude Modell | `claude-haiku-4-5` |
-| `maxHistory` | Maximale Anzahl Chat-Nachrichten | `20` |
-| `systemPrompt` | Optionaler System-Prompt | – |
+| `maxHistory` | Maximale Anzahl Chat-Nachrichten | `10` |
+| `maxTokens` | Maximale Antwortlänge | `600` |
 | `timeout` | HTTP Timeout in Sekunden | `30` |
-| `disable` | Modul deaktivieren (0/1) | `0` |
-| `disableHistory` | Chat-Verlauf deaktivieren (0/1); jede Anfrage wird ohne vorherigen Verlauf an die API gesendet. Der interne Verlauf bleibt erhalten (für `resetChat`), wird aber nicht übertragen. | `0` |
+| `disable` | Modul deaktivieren (`0/1`) | `0` |
+| `disableHistory` | Chat-Verlauf deaktivieren (`0/1`); jede Anfrage wird ohne vorherigen Verlauf an die API gesendet. Der interne Verlauf bleibt erhalten, wird aber nicht übertragen. Das kann bei vielen Anwendungsfällen Tokens sparen, reduziert aber den Gesprächskontext. | `0` |
+| `promptCaching` | Aktiviert Prompt-Caching in der Claude API (`0/1`); kann bei wiederkehrenden Prompts und ähnlichen Kontexten zusätzliche Kosten reduzieren | `0` |
+| `deviceContextMode` | Kontextumfang für `askAboutDevices`: `compact` oder `detailed`; `compact` hält den gesendeten Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
+| `controlContextMode` | Kontextumfang für `control`: `compact` oder `detailed`; `compact` hält den gesendeten Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
+| `systemPrompt` | Optionaler System-Prompt; längere Prompts erhöhen den mitgesendeten Kontext pro Anfrage | – |
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
 | `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
-| `controlList` | Komma-getrennte Liste der Geräte, die Claude steuern darf (Pflicht für `control`) | – |
+| `localControlResolver` | Aktiviert den lokalen Resolver für einfache und eindeutige `control`-Befehle im Hybridbetrieb (`0/1`); viele Standardbefehle können dadurch direkt lokal ausgeführt werden, was API-Aufrufe sowie laufende Kosten reduziert | `1` |
+| `controlList` | Komma-getrennte Liste der Geräte, die lokal bzw. über Claude gesteuert werden dürfen (Pflicht für `control`) | – |
 
 ## Readings
 
@@ -152,8 +225,8 @@ get ClaudeAI chatHistory
 | `state` | Aktueller Status (`initialized`, `requesting...`, `ok`, `error`, `disabled`) |
 | `lastError` | Letzter Fehler |
 | `chatHistory` | Anzahl der Nachrichten im Chat-Verlauf |
-| `lastCommand` | Letzter ausgeführter set-Befehl (z.B. `Lampe1 on`) |
-| `lastCommandResult` | Ergebnis des letzten set-Befehls (`ok` oder Fehlermeldung) |
+| `lastCommand` | Letzter ausgeführter `set`-Befehl (z. B. `Lampe1 on`) |
+| `lastCommandResult` | Ergebnis des letzten `set`-Befehls (`ok` oder Fehlermeldung) |
 
 ## Lizenz
 

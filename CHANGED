@@ -1,5 +1,10 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on
+ - feature: 98_Claude.pm: Claude-Hybridbetrieb (Lokalmodus) mit
+                          localControlResolver: lokale Direktausfuehrung
+                          einfacher und eindeutiger Schaltbefehle ohne
+                          Tokenkosten; komplexe oder uneindeutige Faelle
+                          bleiben beim Claude-Fallback
  - feature: 98_Claude.pm: Lokale Batch-Ausfuehrung fuer aufgeloeste
                           Folgeanweisungen
  - change:  98_Claude.pm: Token-Ersparnis durch Prompt-Caching und dynamische
