@@ -42,6 +42,10 @@
 ##############################################################################
 
 # Versionshistorie:
+# 1.0.2 - 2026-04-11  Perf: Tokenverbrauch fuer Hausautomation reduziert;
+#                          askAboutDevices-, control- und get_device_state-
+#                          Kontexte auf kompakte, aber praxistaugliche
+#                          Kerninformationen begrenzt
 # 1.0.1 - 2026-04-11  Fix: Tool-Use/Tool-Result-Verarbeitung fuer Anthropic
 #                          korrigiert; mehrere tool_use-Bloecke werden jetzt
 #                          gesammelt beantwortet und unvollstaendige historische
@@ -59,7 +63,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.0.1';
+my $MODULE_VERSION = '1.0.2';
 
 sub Claude_Initialize {
     my ($hash) = @_;
@@ -573,6 +577,22 @@ sub Claude_BuildDeviceContext {
 
     return '' unless @devices;
 
+    my @importantReadings = qw(
+        state
+        power
+        pct
+        bri
+        temperature
+        humidity
+        battery
+        contact
+        motion
+        presence
+        desired-temp
+        measured-temp
+        mode
+    );
+
     my $context = "Aktueller Status der Smart-Home Geraete:\n";
 
     for my $devName (@devices) {
@@ -584,17 +604,20 @@ sub Claude_BuildDeviceContext {
 
         $context .= "\nGeraet: $alias (intern: $devName)\n";
         $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
-
-        my $state = ReadingsVal($devName, 'state', 'unbekannt');
-        $context .= "  Status: $state\n";
+        $context .= "  Status: " . ReadingsVal($devName, 'state', 'unbekannt') . "\n";
 
         if (exists $dev->{READINGS}) {
-            $context .= "  Readings:\n";
-            for my $reading (sort keys %{$dev->{READINGS}}) {
+            my @compactReadings;
+            for my $reading (@importantReadings) {
+                next unless exists $dev->{READINGS}{$reading};
                 next if $reading eq 'state';
-                my $val  = $dev->{READINGS}{$reading}{VAL}  // '';
-                my $time = $dev->{READINGS}{$reading}{TIME} // '';
-                $context .= "    $reading: $val (Stand: $time)\n";
+                my $val = $dev->{READINGS}{$reading}{VAL} // '';
+                push @compactReadings, "    $reading: $val";
+            }
+
+            if (@compactReadings) {
+                $context .= "  Wichtige Readings:\n";
+                $context .= join("\n", @compactReadings) . "\n";
             }
         }
 
@@ -622,7 +645,9 @@ sub Claude_BuildControlContext {
     my @devices = split(/\s*,\s*/, $controlList);
     return '' unless @devices;
 
-    my @blacklist = qw(attrTemplate associate);
+    my @preferred = qw(on off toggle pct bri dimUp dimDown open close up down stop lock unlock);
+    my %preferred = map { $_ => 1 } @preferred;
+    my @blacklist = qw(attrTemplate associate rename intervals off-till off-till-overnight on-till on-till-overnight on-for-timer off-for-timer);
     my %blackset  = map { $_ => 1 } @blacklist;
 
     my $context = "Verfuegbare Geraete zum Steuern:\n";
@@ -630,18 +655,29 @@ sub Claude_BuildControlContext {
         next unless exists $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
 
-        my $setListRaw = main::getAllSets($devName) // '';
+        my $state = ReadingsVal($devName, 'state', 'unbekannt');
 
-        my @cmds;
+        my $setListRaw = main::getAllSets($devName) // '';
+        my (@preferredCmds, @otherCmds);
+
         for my $entry (split(/\s+/, $setListRaw)) {
             my ($cmdName) = split(/:/, $entry, 2);
             next unless $cmdName;
             next if $blackset{$cmdName};
-            push @cmds, $entry;
+
+            if ($preferred{$cmdName}) {
+                push @preferredCmds, $cmdName;
+            } elsif (@otherCmds < 3) {
+                push @otherCmds, $cmdName;
+            }
         }
 
+        my @cmds = (@preferredCmds, @otherCmds);
+        my %seen;
+        @cmds = grep { !$seen{$_}++ } @cmds;
         my $cmdsStr = @cmds ? join(', ', @cmds) : 'unbekannt';
-        $context .= "  $alias (intern: $devName) -- set-Befehle: $cmdsStr\n";
+
+        $context .= "  $alias (intern: $devName, Status: $state) -- Befehle: $cmdsStr\n";
     }
 
     return $context;
@@ -957,15 +993,50 @@ sub Claude_HandleControlResponse {
 
             if (exists $main::defs{$device}) {
                 my $dev = $main::defs{$device};
+                my @importantReadings = qw(
+                    state
+                    power
+                    pct
+                    bri
+                    temperature
+                    humidity
+                    battery
+                    contact
+                    motion
+                    presence
+                    desired-temp
+                    measured-temp
+                    mode
+                );
+
                 $stateResult  = "Geraet: $device\n";
                 $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
                 $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
+
                 if (exists $dev->{READINGS}) {
-                    $stateResult .= "Readings:\n";
-                    for my $reading (sort keys %{$dev->{READINGS}}) {
+                    my @compactReadings;
+                    my %important = map { $_ => 1 } @importantReadings;
+
+                    for my $reading (@importantReadings) {
+                        next unless exists $dev->{READINGS}{$reading};
                         next if $reading eq 'state';
                         my $val = $dev->{READINGS}{$reading}{VAL} // '';
-                        $stateResult .= "  $reading: $val\n";
+                        push @compactReadings, "  $reading: $val";
+                    }
+
+                    if (@compactReadings < 5) {
+                        for my $reading (sort keys %{$dev->{READINGS}}) {
+                            next if $reading eq 'state';
+                            next if $important{$reading};
+                            my $val = $dev->{READINGS}{$reading}{VAL} // '';
+                            push @compactReadings, "  $reading: $val";
+                            last if @compactReadings >= 5;
+                        }
+                    }
+
+                    if (@compactReadings) {
+                        $stateResult .= "Wichtige Readings:\n";
+                        $stateResult .= join("\n", @compactReadings) . "\n";
                     }
                 }
             } else {
