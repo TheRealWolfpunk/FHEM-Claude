@@ -53,6 +53,19 @@
 ##############################################################################
 
 # Versionshistorie:
+# 1.0.7 - 2026-04-12  Perf/Fix: Control-Prompts und ToolResult-Runden weiter
+#                          komprimiert; effektive Control-History dynamisch
+#                          begrenzt; Batch-Kontext bei mehrstufigem Tool-Use
+#                          wird erst nach Abschluss der Session finalisiert,
+#                          um Zielmengen-Fehler zu vermeiden
+# 1.0.6 - 2026-04-12  Fix: Folgeanweisungen mit Pronomen robuster gemacht;
+#                          letzte Steueraktion wird als Batch gemerkt und
+#                          Anweisungen werden lokal vor dem API-Call auf
+#                          die Zielmenge umgeschrieben und ausgefuehrt
+# 1.0.5 - 2026-04-12  Fix/Perf: Control-Requests gegen leere Messages und
+#                          Parameter abgesichert; Control-Antworten
+#                          standardmaessig verkuerzt; zusaetzliche Debug-Logs
+#                          fuer Referenzkontext und Tool-Use integriert
 # 1.0.4 - 2026-04-12  Perf: Tokenverbrauch weiter reduziert; kleinere Defaults fuer
 #                          maxHistory/maxTokens, optionales Prompt-Caching,
 #                          kompaktere Tool-Definitionen, sowie optionale
@@ -80,7 +93,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.0.4';
+my $MODULE_VERSION = '1.1.2';
 
 sub Claude_Initialize {
     my ($hash) = @_;
@@ -136,6 +149,8 @@ sub Claude_Define {
     readingsSingleUpdate($hash, 'lastError',         '-',           0);
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
+    $hash->{LAST_CONTROLLED_DEVICES} = [];
+    $hash->{LAST_CONTROL_BATCH}      = undef;
 
     Log3 $name, 3, "Claude ($name): Defined";
     return undef;
@@ -192,6 +207,8 @@ sub Claude_Set {
 
     } elsif ($cmd eq 'resetChat') {
         $hash->{CHAT} = [];
+        $hash->{LAST_CONTROLLED_DEVICES} = [];
+        $hash->{LAST_CONTROL_BATCH}      = undef;
         readingsSingleUpdate($hash, 'chatHistory', 0, 1);
         readingsSingleUpdate($hash, 'state', 'chat reset', 1);
         Log3 $name, 3, "Claude ($name): Chat-Verlauf zurueckgesetzt";
@@ -835,12 +852,57 @@ sub Claude_GetControlTools {
 ##############################################################################
 # Hilfsfunktion: Gueltigen Claude-Chat fuer Tool-Use rekonstruieren
 ##############################################################################
-sub Claude_SanitizeMessagesForApi {
+sub Claude_DebugMessageSummary {
     my ($messages) = @_;
+    return '[]' unless $messages && ref($messages) eq 'ARRAY';
+
+    my @summary;
+    for my $idx (0 .. $#$messages) {
+        my $msg = $messages->[$idx];
+        next unless $msg && ref($msg) eq 'HASH';
+
+        my $role = $msg->{role} // '?';
+        my $content = $msg->{content};
+        my @parts;
+
+        if (ref($content) eq 'ARRAY') {
+            for my $part (@$content) {
+                next unless ref($part) eq 'HASH';
+                my $type = $part->{type} // '?';
+
+                if ($type eq 'text') {
+                    push @parts, 'text';
+                } elsif ($type eq 'image') {
+                    push @parts, 'image';
+                } elsif ($type eq 'tool_use') {
+                    my $toolName = $part->{name} // '?';
+                    my $toolId   = $part->{id}   // '?';
+                    push @parts, "tool_use:$toolName:$toolId";
+                } elsif ($type eq 'tool_result') {
+                    my $toolId = $part->{tool_use_id} // '?';
+                    push @parts, "tool_result:$toolId";
+                } else {
+                    push @parts, $type;
+                }
+            }
+        } else {
+            push @parts, 'scalar';
+        }
+
+        push @summary, $idx . ':' . $role . '[' . join(',', @parts) . ']';
+    }
+
+    return '[' . join(' | ', @summary) . ']';
+}
+
+sub Claude_SanitizeMessagesForApi {
+    my ($messages, $logName) = @_;
     return [] unless $messages && ref($messages) eq 'ARRAY';
 
     my @sanitized;
     my @pendingToolIds;
+
+    Log3 $logName, 4, "Claude ($logName): Sanitize input " . Claude_DebugMessageSummary($messages) if defined $logName;
 
     for my $msg (@$messages) {
         next unless $msg && ref($msg) eq 'HASH';
@@ -860,6 +922,10 @@ sub Claude_SanitizeMessagesForApi {
 
             push @sanitized, $msg;
             @pendingToolIds = @toolIds;
+
+            if (@toolIds && defined $logName) {
+                Log3 $logName, 4, "Claude ($logName): Sanitize assistant tool_use IDs: " . join(', ', @toolIds);
+            }
             next;
         }
 
@@ -880,7 +946,9 @@ sub Claude_SanitizeMessagesForApi {
                     role    => 'user',
                     content => \@toolResults
                 };
+                Log3 $logName, 4, "Claude ($logName): Sanitize matched tool_results for IDs: " . join(', ', @pendingToolIds) if defined $logName;
             } else {
+                Log3 $logName, 4, "Claude ($logName): Sanitize dropped incomplete tool turn; expected IDs: " . join(', ', @pendingToolIds) . "; found " . scalar(@toolResults) . " passende tool_results" if defined $logName;
                 pop @sanitized;
             }
 
@@ -891,7 +959,12 @@ sub Claude_SanitizeMessagesForApi {
         push @sanitized, $msg;
     }
 
-    pop @sanitized if @pendingToolIds;
+    if (@pendingToolIds) {
+        Log3 $logName, 4, "Claude ($logName): Sanitize removed trailing assistant tool_use without tool_results: " . join(', ', @pendingToolIds) if defined $logName;
+        pop @sanitized;
+    }
+
+    Log3 $logName, 4, "Claude ($logName): Sanitize output " . Claude_DebugMessageSummary(\@sanitized) if defined $logName;
     return \@sanitized;
 }
 
@@ -903,6 +976,277 @@ sub Claude_RollbackControlSession {
     my $startIdx = $hash->{CONTROL_START_IDX} // 0;
     splice(@{$hash->{CHAT}}, $startIdx);
     delete $hash->{CONTROL_START_IDX};
+    delete $hash->{CONTROL_SUCCESSFUL_DEVICES};
+    delete $hash->{CONTROL_SUCCESSFUL_COMMANDS};
+}
+
+sub Claude_BuildLastControlledContext {
+    my ($hash) = @_;
+    my $devices = $hash->{LAST_CONTROLLED_DEVICES};
+
+    return '' unless $devices && ref($devices) eq 'ARRAY' && @$devices;
+
+    my @parts;
+    for my $devName (@$devices) {
+        next unless defined $devName && $devName ne '';
+        next unless exists $main::defs{$devName};
+
+        my $alias = AttrVal($devName, 'alias', $devName);
+        my $state = ReadingsVal($devName, 'state', 'unbekannt');
+        push @parts, "$alias (intern: $devName, Status: $state)";
+    }
+
+    return '' unless @parts;
+
+    return "Zuletzt erfolgreich gesteuerte Geraete:\n  " . join("\n  ", @parts) . "\n";
+}
+
+sub Claude_BuildLastControlBatchContext {
+    my ($hash) = @_;
+    my $batch = $hash->{LAST_CONTROL_BATCH};
+
+    return '' unless $batch && ref($batch) eq 'HASH';
+
+    my $instruction = $batch->{instruction} // '';
+    my $command     = $batch->{command}     // '';
+    my $devices     = $batch->{devices};
+    my $count       = $batch->{count}       // 0;
+
+    return '' unless $devices && ref($devices) eq 'ARRAY' && @$devices;
+
+    my @parts;
+    for my $devName (@$devices) {
+        next unless defined $devName && $devName ne '';
+        next unless exists $main::defs{$devName};
+
+        my $alias = AttrVal($devName, 'alias', $devName);
+        my $state = ReadingsVal($devName, 'state', 'unbekannt');
+        push @parts, "$alias (intern: $devName, Status: $state)";
+    }
+
+    return '' unless @parts;
+
+    my $batchContext = "Letzte Zielmenge fuer Referenzen:\n";
+    $batchContext .= "  Anweisung: $instruction\n" if $instruction ne '';
+    $batchContext .= "  Befehl: $command\n" if $command ne '';
+    $batchContext .= "  Anzahl: $count\n";
+    $batchContext .= "  Geraete:\n  " . join("\n  ", @parts) . "\n";
+
+    return $batchContext;
+}
+
+sub Claude_BuildControlSystemPrompt {
+    my ($hash, %opts) = @_;
+
+    my $includeControlContext = exists $opts{include_control_context} ? $opts{include_control_context} : 1;
+    my $name = $hash->{NAME};
+
+    my $systemPrompt            = AttrVal($name, 'systemPrompt', '');
+    my $controlContext          = $includeControlContext ? Claude_BuildControlContext($hash) : '';
+    my $lastControlledContext   = Claude_BuildLastControlledContext($hash);
+    my $lastControlBatchContext = Claude_BuildLastControlBatchContext($hash);
+
+    my @systemParts;
+    push @systemParts, $systemPrompt if $systemPrompt ne '';
+    push @systemParts, "Steuerregeln:\n- Verweise wie sie/die/diese/wieder/nochmal bevorzugt auf die letzte gemeinsame Zielmenge beziehen.\n- Niemals Tool-Aufrufe mit leerem device oder command erzeugen.\n- Bei Unklarheit bevorzugt die letzte gemeinsame Zielmenge statt nur eines Einzelgeraets nutzen.\n- Wenn weiter unklar, nur eindeutig bestimmbare Geraete verwenden.\n- Nach Erfolg genau 1 kurzen Satz antworten.\n- Keine Geraetelisten ausgeben, ausser bei explizitem Wunsch.\n- Bevorzuge kurze Sammelformulierungen wie 'Die Wohnzimmerbeleuchtung ist jetzt aus.'";
+    push @systemParts, $lastControlBatchContext if $lastControlBatchContext ne '';
+    push @systemParts, $lastControlledContext if $lastControlledContext ne '';
+    push @systemParts, $controlContext if $controlContext ne '';
+
+    return join("\n\n", @systemParts);
+}
+
+sub Claude_RememberControlledDevices {
+    my ($hash, $devices) = @_;
+    return unless $devices && ref($devices) eq 'ARRAY';
+
+    my %seen;
+    my @unique = grep { defined $_ && $_ ne '' && !$seen{$_}++ } @$devices;
+    $hash->{LAST_CONTROLLED_DEVICES} = \@unique;
+}
+
+sub Claude_RememberControlBatch {
+    my ($hash, $instruction, $successfulDevices, $successfulCommands) = @_;
+    return unless $successfulDevices && ref($successfulDevices) eq 'ARRAY' && @$successfulDevices;
+
+    my %seen;
+    my @devices = grep { defined $_ && $_ ne '' && !$seen{$_}++ } @$successfulDevices;
+
+    my %cmdCount;
+    if ($successfulCommands && ref($successfulCommands) eq 'ARRAY') {
+        for my $cmd (@$successfulCommands) {
+            next unless defined $cmd && $cmd ne '';
+            $cmdCount{$cmd}++;
+        }
+    }
+
+    my $dominantCommand = '';
+    if (%cmdCount) {
+        ($dominantCommand) = sort { $cmdCount{$b} <=> $cmdCount{$a} || $a cmp $b } keys %cmdCount;
+    }
+
+    $hash->{LAST_CONTROL_BATCH} = {
+        instruction => ($instruction // ''),
+        command     => $dominantCommand,
+        devices     => \@devices,
+        count       => scalar(@devices),
+    };
+}
+
+sub Claude_IsReferentialFollowupInstruction {
+    my ($instruction) = @_;
+    return 0 unless defined $instruction;
+
+    my $text = lc($instruction);
+    $text =~ s/[[:punct:]]/ /g;
+    $text =~ s/\s+/ /g;
+    $text =~ s/^\s+|\s+$//g;
+
+    return 0 if $text eq '';
+
+    my $hasPronoun = ($text =~ /\b(?:sie|die|der|das|diese|dieser|dieses|jene|jener|jenes|dieselben|den|dem|denen)\b/);
+    my $hasRepeat  = ($text =~ /\b(?:wieder|nochmal|erneut)\b/);
+    my $hasAction  = ($text =~ /\b(?:an|aus|ein|einmachen|einschalten|anmachen|off|on|ausschalten|ausmachen|toggle|umschalten|dimmen|heller|dunkler)\b/);
+
+    my $hasConcreteTarget = ($text =~ /\b(?:wohnzimmer|kueche|küche|bad|badezimmer|flur|schlafzimmer|wintergarten|lampe|lampen|licht|lichter|led|decke|spiegel|lavalampe)\b/);
+
+    return 0 if $hasConcreteTarget;
+    return 1 if $hasAction && ($hasPronoun || $hasRepeat);
+
+    return 0;
+}
+
+sub Claude_ExpandReferentialInstruction {
+    my ($hash, $instruction) = @_;
+    return $instruction unless Claude_IsReferentialFollowupInstruction($instruction);
+
+    my $batch = $hash->{LAST_CONTROL_BATCH};
+    return $instruction unless $batch && ref($batch) eq 'HASH';
+
+    my $devices = $batch->{devices};
+    return $instruction unless $devices && ref($devices) eq 'ARRAY' && @$devices;
+
+    my @parts;
+    for my $devName (@$devices) {
+        next unless defined $devName && $devName ne '';
+        next unless exists $main::defs{$devName};
+        my $alias = AttrVal($devName, 'alias', $devName);
+        push @parts, "$alias (intern: $devName)";
+    }
+
+    return $instruction unless @parts;
+
+    my $expanded = $instruction . "\n\n";
+    $expanded .= "WICHTIGER AUFLOESUNGSKONTEXT: Diese Folgeanweisung bezieht sich auf die gesamte zuletzt erfolgreich gesteuerte Zielmenge, nicht nur auf ein einzelnes Geraet.\n";
+    $expanded .= "Letzte Zielmenge mit " . scalar(@parts) . " Geraeten:\n- " . join("\n- ", @parts);
+
+    return $expanded;
+}
+
+sub Claude_InferReferentialBatchCommand {
+    my ($instruction) = @_;
+    return undef unless defined $instruction;
+
+    my $text = lc($instruction);
+
+    return 'off'    if $text =~ /\b(?:aus|ausschalten|ausmachen|off)\b/;
+    return 'on'     if $text =~ /\b(?:an|anmachen|einschalten|einmachen|on)\b/;
+    return 'toggle' if $text =~ /\b(?:toggle|umschalten)\b/;
+
+    return undef;
+}
+
+sub Claude_FinalizeRememberedControlSession {
+    my ($hash) = @_;
+
+    my $devices  = delete $hash->{CONTROL_SUCCESSFUL_DEVICES};
+    my $commands = delete $hash->{CONTROL_SUCCESSFUL_COMMANDS};
+    my $instruction = $hash->{LAST_CONTROL_INSTRUCTION};
+
+    return unless $devices && ref($devices) eq 'ARRAY' && @$devices;
+
+    Claude_RememberControlledDevices($hash, $devices);
+    Claude_RememberControlBatch($hash, $instruction, $devices, $commands);
+
+    my $name = $hash->{NAME};
+    Log3 $name, 4, "Claude ($name): Finalisiere Control-Session fuer letzte Zielmenge: " . join(', ', @$devices);
+}
+
+sub Claude_ExecuteReferentialBatchLocally {
+    my ($hash, $instruction) = @_;
+    return 0 unless Claude_IsReferentialFollowupInstruction($instruction);
+
+    my $command = Claude_InferReferentialBatchCommand($instruction);
+    return 0 unless defined $command && $command ne '';
+
+    my $batch = $hash->{LAST_CONTROL_BATCH};
+    return 0 unless $batch && ref($batch) eq 'HASH';
+
+    my $devices = $batch->{devices};
+    return 0 unless $devices && ref($devices) eq 'ARRAY' && @$devices;
+
+    my $name = $hash->{NAME};
+    my @successfulDevices;
+    my @successfulCommands;
+    my @executedLines;
+
+    my $controlList = AttrVal($name, 'controlList', '');
+    my %allowed     = map { $_ => 1 } split(/\s*,\s*/, $controlList);
+
+    for my $device (@$devices) {
+        next unless defined $device && $device ne '';
+        next unless $allowed{$device};
+        next unless exists $main::defs{$device};
+
+        my $setResult = CommandSet(undef, "$device $command");
+        $setResult //= 'ok';
+        $setResult = 'ok' if $setResult eq '';
+
+        Log3 $name, 3, "Claude ($name): local referential batch set $device $command -> $setResult";
+
+        next unless $setResult eq 'ok';
+
+        push @successfulDevices,  $device;
+        push @successfulCommands, $command;
+        push @executedLines, "$device $command";
+    }
+
+    return 0 unless @successfulDevices;
+
+    Claude_RememberControlledDevices($hash, \@successfulDevices);
+    Claude_RememberControlBatch($hash, $instruction, \@successfulDevices, \@successfulCommands);
+
+    my $lastCmd = join(', ', @executedLines);
+    utf8::encode($lastCmd) if utf8::is_utf8($lastCmd);
+
+    my $summary;
+    if ($command eq 'off') {
+        $summary = "Die zuletzt gesteuerte Geraetegruppe ist jetzt aus.";
+    } elsif ($command eq 'on') {
+        $summary = "Die zuletzt gesteuerte Geraetegruppe ist jetzt an.";
+    } elsif ($command eq 'toggle') {
+        $summary = "Die zuletzt gesteuerte Geraetegruppe wurde umgeschaltet.";
+    } else {
+        $summary = "Die zuletzt gesteuerte Geraetegruppe wurde ausgefuehrt.";
+    }
+
+    my $plain = $summary;
+    my $html  = $summary;
+    my $ssml  = "<speak>$summary</speak>";
+
+    readingsBeginUpdate($hash);
+    readingsBulkUpdate($hash, 'lastCommand',       $lastCmd);
+    readingsBulkUpdate($hash, 'lastCommandResult', 'ok');
+    readingsBulkUpdate($hash, 'response',          $summary);
+    readingsBulkUpdate($hash, 'responsePlain',     $plain);
+    readingsBulkUpdate($hash, 'responseHTML',      $html);
+    readingsBulkUpdate($hash, 'responseSSML',      $ssml);
+    readingsBulkUpdate($hash, 'state',             'ok');
+    readingsBulkUpdate($hash, 'lastError',         '-');
+    readingsEndUpdate($hash, 1);
+
+    Log3 $name, 4, "Claude ($name): Referenzielle Folgeanweisung lokal auf Batch aufgeloest: command=$command devices=" . join(', ', @successfulDevices);
+    return 1;
 }
 
 ##############################################################################
@@ -911,9 +1255,14 @@ sub Claude_RollbackControlSession {
 sub Claude_SendControl {
     my ($hash, $instruction) = @_;
     my $name = $hash->{NAME};
+    my $originalInstruction = $instruction;
 
     if (AttrVal($name, 'disable', 0)) {
         readingsSingleUpdate($hash, 'state', 'disabled', 1);
+        return;
+    }
+
+    if (Claude_ExecuteReferentialBatchLocally($hash, $instruction)) {
         return;
     }
 
@@ -928,6 +1277,7 @@ sub Claude_SendControl {
     my $model      = AttrVal($name, 'model',      'claude-haiku-4-5');
     my $timeout    = AttrVal($name, 'timeout',    30);
     my $maxHistory = int(AttrVal($name, 'maxHistory', 10));
+    my $effectiveHistory = $maxHistory < 6 ? 6 : $maxHistory;
     my $maxTokens  = int(AttrVal($name, 'maxTokens',  300));
 
     Log3 $name, 4, "Claude ($name): Verwende Modell $model";
@@ -935,6 +1285,12 @@ sub Claude_SendControl {
     # Startindex merken, damit bei Fehlern die gesamte Control-Session
     # sauber aus dem Verlauf entfernt werden kann
     $hash->{CONTROL_START_IDX} = scalar(@{$hash->{CHAT}});
+    $hash->{CONTROL_SUCCESSFUL_DEVICES}  = [];
+    $hash->{CONTROL_SUCCESSFUL_COMMANDS} = [];
+    $instruction = Claude_ExpandReferentialInstruction($hash, $instruction);
+    Log3 $name, 4, "Claude ($name): Expandierte Folgeanweisung von '$originalInstruction' zu '$instruction'" if $instruction ne $originalInstruction;
+
+    $hash->{LAST_CONTROL_INSTRUCTION} = $originalInstruction;
 
     push @{$hash->{CHAT}}, {
         role    => 'user',
@@ -944,20 +1300,26 @@ sub Claude_SendControl {
         }]
     };
 
-    Claude_TrimHistory($hash, $maxHistory);
+    Claude_TrimHistory($hash, $effectiveHistory);
 
     my $disableHistory = AttrVal($name, 'disableHistory', 0);
     my $messagesToSend = $disableHistory
         ? [ $hash->{CHAT}[-1] ]
-        : Claude_SanitizeMessagesForApi($hash->{CHAT});
+        : Claude_SanitizeMessagesForApi($hash->{CHAT}, $name);
 
-    my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
-    my $controlContext = Claude_BuildControlContext($hash);
+    if (!$messagesToSend || ref($messagesToSend) ne 'ARRAY' || !@$messagesToSend) {
+        my $errMsg = 'Interner Fehler: Keine gueltigen messages fuer Control-Anfrage erzeugt';
+        readingsSingleUpdate($hash, 'lastError', $errMsg, 1);
+        readingsSingleUpdate($hash, 'state', 'error', 1);
+        Log3 $name, 1, "Claude ($name): $errMsg; CHAT=" . Claude_DebugMessageSummary($hash->{CHAT});
+        Claude_RollbackControlSession($hash);
+        return;
+    }
+    Log3 $name, 4, "Claude ($name): Control messages " . Claude_DebugMessageSummary($messagesToSend);
 
-    my $fullSystem = '';
-    $fullSystem .= $systemPrompt   if $systemPrompt;
-    $fullSystem .= "\n\n"          if $systemPrompt && $controlContext;
-    $fullSystem .= $controlContext if $controlContext;
+    my $fullSystem = Claude_BuildControlSystemPrompt($hash, include_control_context => 1);
+
+    Log3 $name, 4, "Claude ($name): Effective control history=$effectiveHistory" if $effectiveHistory != $maxHistory;
 
     # Control-Request an Claude:
     # zusaetzlich zu den Nachrichten werden hier die verfuegbaren Tools
@@ -1041,6 +1403,8 @@ sub Claude_HandleControlResponse {
 
     my $contentBlocks = $result->{content} // [];
     my @toolResults;
+    my @successfulDevices;
+    my @successfulCommands;
     my $hasToolUse = 0;
 
     for my $part (@$contentBlocks) {
@@ -1052,10 +1416,35 @@ sub Claude_HandleControlResponse {
         my $toolName = $part->{name}  // '';
         my $toolId   = $part->{id}    // '';
         my $input    = $part->{input} // {};
+        my $inputJson = eval { encode_json($input) };
+        $inputJson = '{json_encode_error}' if $@;
+        Log3 $name, 4, "Claude ($name): ToolUse empfangen: name=$toolName id=$toolId input=$inputJson";
 
         if ($toolName eq 'set_device') {
             my $device  = $input->{device}  // '';
             my $command = $input->{command} // '';
+
+            if (!$device) {
+                my $errMsg = "Fehler: Tool set_device ohne device";
+                Log3 $name, 2, "Claude ($name): $errMsg";
+                push @toolResults, {
+                    type        => 'tool_result',
+                    tool_use_id => $toolId,
+                    content     => $errMsg
+                };
+                next;
+            }
+
+            if (!$command) {
+                my $errMsg = "Fehler: Tool set_device ohne command";
+                Log3 $name, 2, "Claude ($name): $errMsg";
+                push @toolResults, {
+                    type        => 'tool_result',
+                    tool_use_id => $toolId,
+                    content     => $errMsg
+                };
+                next;
+            }
 
             if ($command =~ /[;|`\$\(\)<>\n]/) {
                 my $errMsg = "Fehler: Ungueltiger Befehl '$command' (unerlaubte Zeichen)";
@@ -1087,6 +1476,8 @@ sub Claude_HandleControlResponse {
                 readingsEndUpdate($hash, 1);
 
                 Log3 $name, 3, "Claude ($name): set $device $command -> $setResult";
+                push @successfulDevices, $device;
+                push @successfulCommands, $command;
                 push @toolResults, {
                     type        => 'tool_result',
                     tool_use_id => $toolId,
@@ -1117,7 +1508,9 @@ sub Claude_HandleControlResponse {
             my $device = $input->{device} // '';
             my $stateResult;
 
-            if (exists $main::defs{$device}) {
+            if (!$device) {
+                $stateResult = "Fehler: Tool get_device_state ohne device";
+            } elsif (exists $main::defs{$device}) {
                 my $dev = $main::defs{$device};
                 my @importantReadings = qw(
                     state
@@ -1185,6 +1578,19 @@ sub Claude_HandleControlResponse {
     }
 
     if ($hasToolUse) {
+        if (@successfulDevices) {
+            my $sessionDevices  = $hash->{CONTROL_SUCCESSFUL_DEVICES}  ||= [];
+            my $sessionCommands = $hash->{CONTROL_SUCCESSFUL_COMMANDS} ||= [];
+
+            push @$sessionDevices,  @successfulDevices;
+            push @$sessionCommands, @successfulCommands;
+
+            my %seen;
+            @$sessionDevices = grep { defined $_ && $_ ne '' && !$seen{$_}++ } @$sessionDevices;
+
+            Log3 $name, 4, "Claude ($name): Sammle erfolgreiche Geraete fuer laufende Control-Session: " . join(', ', @$sessionDevices);
+        }
+
         push @{$hash->{CHAT}}, {
             role    => 'assistant',
             content => $contentBlocks
@@ -1214,6 +1620,7 @@ sub Claude_HandleControlResponse {
         content => $contentBlocks
     };
 
+    Claude_FinalizeRememberedControlSession($hash);
     delete $hash->{CONTROL_START_IDX};
 
     my $responseForReading = $responseUnicode;
@@ -1269,16 +1676,20 @@ sub Claude_SendToolResults {
         my $startIdx = $hash->{CONTROL_START_IDX} // 0;
         $messagesToSend = [ @{$hash->{CHAT}}[$startIdx..$#{$hash->{CHAT}}] ];
     } else {
-        $messagesToSend = Claude_SanitizeMessagesForApi($hash->{CHAT});
+        $messagesToSend = Claude_SanitizeMessagesForApi($hash->{CHAT}, $name);
     }
 
-    my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
-    my $controlContext = Claude_BuildControlContext($hash);
+    if (!$messagesToSend || ref($messagesToSend) ne 'ARRAY' || !@$messagesToSend) {
+        my $errMsg = 'Interner Fehler: Keine gueltigen messages fuer ToolResults erzeugt';
+        readingsSingleUpdate($hash, 'lastError', $errMsg, 1);
+        readingsSingleUpdate($hash, 'state', 'error', 1);
+        Log3 $name, 1, "Claude ($name): $errMsg; CHAT=" . Claude_DebugMessageSummary($hash->{CHAT});
+        Claude_RollbackControlSession($hash);
+        return;
+    }
+    Log3 $name, 4, "Claude ($name): ToolResult messages " . Claude_DebugMessageSummary($messagesToSend);
 
-    my $fullSystem = '';
-    $fullSystem .= $systemPrompt   if $systemPrompt;
-    $fullSystem .= "\n\n"          if $systemPrompt && $controlContext;
-    $fullSystem .= $controlContext if $controlContext;
+    my $fullSystem = Claude_BuildControlSystemPrompt($hash, include_control_context => 0);
 
     my %requestBody = (
         model      => $model,
@@ -1299,7 +1710,10 @@ sub Claude_SendToolResults {
     }
 
     my @toolIds = map { $_->{tool_use_id} // '?' } @$toolResults;
+    my @toolContents = map { ($_->{tool_use_id} // '?') . '=' . ($_->{content} // '') } @$toolResults;
     Log3 $name, 4, "Claude ($name): ToolResults fuer '" . join("', '", @toolIds) . "' gesendet";
+    Log3 $name, 4, "Claude ($name): ToolResult Inhalte: " . join(' || ', @toolContents);
+    Log3 $name, 4, "Claude ($name): ToolResult Request " . $jsonBody;
 
     HttpUtils_NonblockingGet({
         url      => Claude_ApiUrl(),
