@@ -1,10 +1,17 @@
-# FHEM-Gemini
+# FHEM-Claude
 
-FHEM-Modul zur Anbindung der Google Gemini AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl (Function Calling) und mehr – direkt aus FHEM heraus.
+FHEM-Modul zur Anbindung der Anthropic Claude AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl (Function Calling) und mehr – direkt aus FHEM heraus.
+Dieses Modul ist ein Fork von https://github.com/ahlers2mi/FHEM-Gemini.
+
+### API-Kosten & Credits
+
+Dieses Modul nutzt das Prepaid-System von Anthropic. Standardmäßig ist das Modell **claude-haiku-4-5** hinterlegt, da es für Hausautomations-Befehle das effizienteste Preis-Leistungs-Verhältnis bietet.
+
+Pro 1.000 durchschnittlichen Interaktionen (Statusabfragen oder Schaltbefehle) fallen Kosten von etwa **1,50 $** an. Ein Startguthaben von **5 $** reicht somit für über 3.000 Anfragen. Bei einer täglichen Nutzung von 10 Befehlen deckt dies einen Zeitraum von rund **10 Monaten** ab. Der tatsächliche Verbrauch variiert je nach Umfang deiner FHEM-Geräteliste und der Komplexität der Aufgaben.
 
 ## Features
 
-- 💬 Textfragen an Gemini stellen
+- 💬 Textfragen an Claude stellen
 - 🖼️ Bilder analysieren (Dateipfad)
 - 🏠 Smart-Home-Geräte per Sprachbefehl steuern (Function Calling)
 - 📋 Geräte-Status abfragen und zusammenfassen lassen
@@ -14,59 +21,61 @@ FHEM-Modul zur Anbindung der Google Gemini AI API. Ermöglicht Textanfragen, Bil
 ## Voraussetzungen
 
 - FHEM-Installation (Perl-basiert)
-- Google Gemini API Key ([hier kostenlos erhalten](https://aistudio.google.com/app/apikey))
+- Anthropic Claude API Key ([hier erhalten - kostenpflichtig, siehe oben](https://platform.claude.com))
 
 ## Installation
 
 ### Erstmalig laden
 
 ```
-update all https://raw.githubusercontent.com/ahlers2mi/FHEM-Gemini/main/controls_Gemini.txt
+update all https://raw.githubusercontent.com/TheRealWolfpunk/FHEM-Claude/main/controls_Claude.txt
 shutdown restart
 ```
 
 ### Für automatische Updates (zusammen mit `update all`)
 
 ```
-update add https://raw.githubusercontent.com/ahlers2mi/FHEM-Gemini/main/controls_Gemini.txt
+update add https://raw.githubusercontent.com/TheRealWolfpunk/FHEM-Claude/main/controls_Claude.txt
 ```
 
-Danach wird das Modul bei jedem `update all` automatisch mitaktualisiert.
+Danach wird das Modul bei jedem `update all` automatisch aktualisiert.
 
 ## Einrichtung
 
 ### 1. Gerät definieren
 
 ```
-define GeminiAI Gemini
+define ClaudeAI Claude
 ```
 
 ### 2. API Key setzen
 
 ```
-attr GeminiAI apiKey DEIN-GOOGLE-GEMINI-API-KEY
+attr ClaudeAI apiKey DEIN-ANTHROPIC-CLAUDE-API-KEY
 ```
 
 ### 3. Optional: Modell wählen
 
 ```
-attr GeminiAI model gemini-3.1-flash-lite-preview
+attr ClaudeAI model claude-haiku-4-5
 ```
 
-Das ist bereits der Standard. Andere verfügbare Modelle: `gemini-3.1-flash-lite-preview`, `gemini-3.1-flash-image-preview`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3-pro-image-preview` usw.
+Das ist bereits der Standard. Aus Kostengründen sollte man auch bei diesem Modell bleiben. Andere verfügbare Modelle: `claude-sonnet-4-6`, `claude-opus-4-6`
+
+Eine aktuelle Übersicht der Modelle gibt es hier: https://platform.claude.com/docs/en/about-claude/models/overview
 
 ## Verwendung
 
 ### Textfrage stellen
 
 ```
-set GeminiAI ask Was ist das Wetter morgen in Berlin?
+set ClaudeAI ask Wie ist das Wetter morgen in Berlin?
 ```
 
 ### Bild analysieren
 
 ```
-set GeminiAI askWithImage /opt/fhem/www/snapshot.jpg Was ist auf diesem Bild zu sehen?
+set ClaudeAI askWithImage /opt/fhem/www/snapshot.jpg Was ist auf diesem Bild zu sehen?
 ```
 
 Unterstützte Bildformate: `jpg`/`jpeg`, `png`, `gif`, `webp`, `bmp`, `heic`, `heif`.
@@ -74,55 +83,55 @@ Unterstützte Bildformate: `jpg`/`jpeg`, `png`, `gif`, `webp`, `bmp`, `heic`, `h
 ### Geräte-Status abfragen
 
 ```
-attr GeminiAI deviceList Lampe1,Heizung,Rolladen1
-set GeminiAI askAboutDevices Welche Geräte sind gerade eingeschaltet?
+attr ClaudeAI deviceList Lampe1,Heizung,Rolladen1
+set ClaudeAI askAboutDevices Welche Geräte sind gerade eingeschaltet?
 ```
 
 Alternativ alle Geräte eines Raums automatisch einbeziehen:
 
 ```
-attr GeminiAI deviceRoom Wohnzimmer,Küche
-set GeminiAI askAboutDevices Gib mir eine Zusammenfassung aller Geräte.
+attr ClaudeAI deviceRoom Wohnzimmer,Küche
+set ClaudeAI askAboutDevices Gib mir eine Zusammenfassung aller Geräte.
 ```
 
 Mit dem Wildcard `*` werden **alle** in FHEM definierten Geräte einbezogen:
 
 ```
-attr GeminiAI deviceList *
-set GeminiAI askAboutDevices Welche Geräte sind gerade aktiv?
+attr ClaudeAI deviceList *
+set ClaudeAI askAboutDevices Welche Geräte sind gerade aktiv?
 ```
 
 ### Geräte per Sprachbefehl steuern (Function Calling)
 
 ```
-attr GeminiAI controlList Lampe1,Heizung,Rolladen1
-set GeminiAI control Mach die Wohnzimmerlampe an
-set GeminiAI control Stelle die Heizung auf 21 Grad
-set GeminiAI control Fahre alle Rolläden runter
+attr ClaudeAI controlList Lampe1,Heizung,Rolladen1
+set ClaudeAI control Mach die Wohnzimmerlampe an
+set ClaudeAI control Stelle die Heizung auf 21 Grad
+set ClaudeAI control Fahre alle Rolläden runter
 ```
 
-Gemini löst Alias-Namen automatisch auf interne FHEM-Namen auf und wählt passende `set`-Befehle selbstständig aus. Nur Geräte aus `controlList` dürfen gesteuert werden.
+Claude löst Alias-Namen automatisch auf interne FHEM-Namen auf und wählt passende `set`-Befehle selbstständig aus. Nur Geräte aus `controlList` dürfen gesteuert werden.
 
-Gemini kann im Rahmen eines `control`-Befehls auch den aktuellen Status eines Geräts selbstständig abfragen (z. B. um zu prüfen, ob eine Lampe bereits an ist), bevor es einen Steuerbefehl absetzt.
+Claude kann im Rahmen eines `control`-Befehls auch den aktuellen Status eines Geräts selbstständig abfragen (z. B. um zu prüfen, ob eine Lampe bereits an ist), bevor es einen Steuerbefehl absetzt.
 
 ### Chat zurücksetzen
 
 ```
-set GeminiAI resetChat
+set ClaudeAI resetChat
 ```
 
 ### Chat-Verlauf anzeigen
 
 ```
-get GeminiAI chatHistory
+get ClaudeAI chatHistory
 ```
 
 ## Attribute
 
 | Attribut | Beschreibung | Standard |
 |---|---|---|
-| `apiKey` | Google Gemini API Key (Pflicht) | – |
-| `model` | Gemini Modell | `gemini-3.1-flash-lite-preview` |
+| `apiKey` | Anthropic Claude API Key (Pflicht) | – |
+| `model` | Claude Modell | `claude-haiku-4-5` |
 | `maxHistory` | Maximale Anzahl Chat-Nachrichten | `20` |
 | `systemPrompt` | Optionaler System-Prompt | – |
 | `timeout` | HTTP Timeout in Sekunden | `30` |
@@ -130,42 +139,21 @@ get GeminiAI chatHistory
 | `disableHistory` | Chat-Verlauf deaktivieren (0/1); jede Anfrage wird ohne vorherigen Verlauf an die API gesendet. Der interne Verlauf bleibt erhalten (für `resetChat`), wird aber nicht übertragen. | `0` |
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
 | `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
-| `controlList` | Komma-getrennte Liste der Geräte, die Gemini steuern darf (Pflicht für `control`) | – |
+| `controlList` | Komma-getrennte Liste der Geräte, die Claude steuern darf (Pflicht für `control`) | – |
 
 ## Readings
 
 | Reading | Beschreibung |
 |---|---|
-| `response` | Letzte Textantwort von Gemini (Roh-Markdown) |
-| `responsePlain` | Letzte Textantwort, Markdown-Syntax entfernt (reiner Text, ideal für Sprachausgabe, Telegram, Notify) |
+| `response` | Letzte Textantwort von Claude (Roh-Markdown) |
+| `responsePlain` | Letzte Textantwort, Markdown-Syntax entfernt (reiner Text, ideal für Telegram, Notify) |
 | `responseHTML` | Letzte Textantwort, Markdown in HTML konvertiert (ideal für Tablet-UI, Web-Frontends) |
+| `responseSSML` | Letzte Textantwort, für Sprachausgabe bereinigt und als SSML aufbereitet |
 | `state` | Aktueller Status (`initialized`, `requesting...`, `ok`, `error`, `disabled`) |
 | `lastError` | Letzter Fehler |
 | `chatHistory` | Anzahl der Nachrichten im Chat-Verlauf |
 | `lastCommand` | Letzter ausgeführter set-Befehl (z.B. `Lampe1 on`) |
 | `lastCommandResult` | Ergebnis des letzten set-Befehls (`ok` oder Fehlermeldung) |
-
-## Versionshistorie
-
-| Version | Datum | Änderung |
-|---|---|---|
-| 2.9.0 | 2026-04-10 | Neu: Readings `responsePlain` (Markdown bereinigt) und `responseHTML` (Markdown zu HTML) |
-| 2.8.0 | 2026-04-10 | Fix: History-Trimming entfernt verwaiste `functionResponse`-User-Turns am Anfang des Verlaufs (API-Fehler 400, Issue #8) |
-| 2.7.0 | 2026-04-10 | Fix: `set`-Befehle werden mit Typ-Informationen (z.B. `:slider,0,1,100`) an Gemini übermittelt; interne FHEM-Einträge (`attrTemplate`, `associate`) per Blacklist gefiltert |
-| 2.6.0 | 2026-04-10 | Fix: `getAllSets()` statt direktem Hash-Zugriff für `set`-Befehle, damit dynamisch berechnete `set`-Listen korrekt übermittelt werden |
-| 2.5.0 | 2026-04-10 | Fix: Chat-Verlauf-Trimming stellt sicher, dass der Verlauf immer mit einem `user`-Turn beginnt (API-Fehler 400 vermeiden) |
-| 2.4.0 | 2026-04-09 | Neues Attribut `disableHistory`: Chat-Verlauf optional deaktivieren |
-| 2.3.0 | 2026-04-09 | `Gemini_BuildControlContext` gibt jetzt auch verfügbare `set`-Befehle aus |
-| 2.2.1 | 2026-04-09 | Fix: Regex für verbotene Zeichen korrigiert |
-| 2.2.0 | 2026-04-09 | Fix: Alias→Name-Mapping wird als `system_instruction` übergeben |
-| 2.1.0 | 2026-04-09 | Neues Attribut `deviceRoom` |
-| 2.0.2 | 2026-04-09 | Fix: gesamtes `content`-Objekt der Modellantwort im Chat speichern |
-| 2.0.1 | 2026-04-09 | Standard-Modell auf `gemini-3.1-flash-lite-preview` aktualisiert |
-| 2.0.0 | 2026-04-09 | Function Calling: neuer Befehl `control`, Attribut `controlList` |
-| 1.3.0 | 2026-03-31 | Fix: UTF-8 Encoding für Readings vs. Chat-Verlauf getrennt behandelt |
-| 1.2.0 | 2026-03-31 | `deviceContext` nur bei `askAboutDevices` mitschicken |
-| 1.1.0 | 2026-03-31 | Fix: doppeltes UTF-8 Encoding in FHEM-Readings |
-| 1.0.0 | 2026-03-31 | Initiale Version |
 
 ## Lizenz
 
