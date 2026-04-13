@@ -1141,6 +1141,14 @@ sub Gemini_SendFunctionResult {
       an Gemini uebermittelt, sodass Sprachbefehle mit Alias-Namen und
       passende Befehle automatisch erkannt werden.
       Beispiel: <code>attr GeminiAI controlList Lampe1,Heizung,Rolladen1</code></li>
+    <li><b>readingBlacklist</b> - Leerzeichen-getrennte Liste von Reading- bzw.
+      Befehlsnamen, die <b>nicht</b> an Gemini uebermittelt werden sollen.
+      Wildcards mit <code>*</code> werden unterstuetzt, z.B. <code>R-*</code> oder <code>Wifi_*</code>.<br>
+      Wenn das Attribut nicht gesetzt ist, gilt folgende eingebaute Standardliste:<br>
+      <code>attrTemplate associate R-* RegL_* associatedWith peerListRDate protLastRcv
+      lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*</code><br>
+      Sobald das Attribut gesetzt wird, ersetzt die angegebene Liste die Standardliste vollstaendig.
+      Beispiel: <code>attr GeminiAI readingBlacklist attrTemplate associate R-* Wifi_*</code></li>
   </ul><br>
 
   <b>Set</b><br>

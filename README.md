@@ -131,6 +131,7 @@ get GeminiAI chatHistory
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
 | `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
 | `controlList` | Komma-getrennte Liste der Geräte, die Gemini steuern darf (Pflicht für `control`) | – |
+| `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- bzw. Befehlsnamen, die **nicht** an Gemini übermittelt werden. Wildcards mit `*` werden unterstützt (z. B. `R-*`, `Wifi_*`). Wenn nicht gesetzt, gilt die eingebaute Standardliste (siehe unten). | `attrTemplate associate R-* RegL_* associatedWith peerListRDate protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*` |
 
 ## Readings
 
@@ -149,6 +150,7 @@ get GeminiAI chatHistory
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 3.0.0 | 2026-04-13 | Neues Attribut `readingBlacklist`: konfigurierbare Filterliste für Readings und set-Befehle mit Wildcard-Unterstützung (`*`); ersetzt die hardcodierte Blacklist; erweiterte Standardliste |
 | 2.9.0 | 2026-04-10 | Neu: Readings `responsePlain` (Markdown bereinigt) und `responseHTML` (Markdown zu HTML) |
 | 2.8.0 | 2026-04-10 | Fix: History-Trimming entfernt verwaiste `functionResponse`-User-Turns am Anfang des Verlaufs (API-Fehler 400, Issue #8) |
 | 2.7.0 | 2026-04-10 | Fix: `set`-Befehle werden mit Typ-Informationen (z.B. `:slider,0,1,100`) an Gemini übermittelt; interne FHEM-Einträge (`attrTemplate`, `associate`) per Blacklist gefiltert |
