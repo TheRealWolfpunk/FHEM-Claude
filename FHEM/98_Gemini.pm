@@ -46,6 +46,8 @@
 ##############################################################################
 
 # Versionshistorie:
+# 3.1.0 - 2026-04-13  Neu: comment-Attribut der Geraete wird nun an Gemini uebermittelt
+#                          (in Gemini_BuildDeviceContext und Gemini_BuildControlContext)
 # 3.0.0 - 2026-04-13  Neu: Attribut readingBlacklist (leerzeichen-getrennt, Wildcards moeglich)
 #                          ersetzt die hardcodierte Blacklist; Standard-Eintraege erweitert um
 #                          R-*, RegL_*, associatedWith, peerListRDate, protLastRcv, lastTimeSync,
@@ -654,7 +656,7 @@ sub Gemini_BuildDeviceContext {
             }
         }
 
-        for my $attrName (qw(room group alias)) {
+        for my $attrName (qw(room group alias comment)) {
             my $attrVal = AttrVal($devName, $attrName, '');
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
@@ -698,7 +700,10 @@ sub Gemini_BuildControlContext {
         }
 
         my $cmdsStr = @cmds ? join(', ', @cmds) : 'unbekannt';
-        $context .= "  $alias (intern: $devName) -- set-Befehle: $cmdsStr\n";
+        my $comment = AttrVal($devName, 'comment', '');
+        $context .= "  $alias (intern: $devName)";
+        $context .= " -- Beschreibung: $comment" if $comment;
+        $context .= " -- set-Befehle: $cmdsStr\n";
     }
 
     return $context;
