@@ -231,7 +231,7 @@ get ClaudeAI chatHistory
 | `deviceContextMode` | Kontext für `askAboutDevices`: `compact` oder `detailed`; `compact` hält den Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
 | `controlContextMode` | Kontext für `control`: `compact` oder `detailed`; `compact` hält den Kontext kleiner, `detailed` liefert mehr Informationen | `detailed` |
 | `localControlResolver` | Aktiviert den lokalen Resolver für den Claude-Hybridbetrieb (`0/1`); einfache und eindeutige `control`-Befehle werden direkt in FHEM ausgeführt, komplexere Fälle laufen weiter über Claude | `1` |
-| `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- oder Befehlsnamen, die nicht an Claude übermittelt werden; Wildcards wie `R-*` oder `Wifi_*` werden unterstützt; gilt für Device-/Control-Kontext und `get_device_state` | – |
+| `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- oder Befehlsnamen, die nicht an Claude übermittelt werden; Wildcards wie `R-*` oder `Wifi_*` werden unterstützt; gilt für Device-/Control-Kontext und `get_device_state`; zusätzlich existiert eine interne Standard-Blacklist | – |
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
 | `controlList` | Komma-getrennte Liste der Geräte, die Claude steuern darf (Pflicht für `control`) | – |
 | `deviceRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch für `askAboutDevices` verwendet | – |
