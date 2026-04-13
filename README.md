@@ -276,6 +276,7 @@ attr global verbose 3
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 3.1.0 | 2026-04-13 | `comment`-Attribut der Geräte wird jetzt an Gemini übermittelt (in `askAboutDevices` und `control`) |
 | 3.0.0 | 2026-04-13 | Neues Attribut `readingBlacklist`: konfigurierbare Filterliste für Readings und set-Befehle mit Wildcard-Unterstützung (`*`); ersetzt die hardcodierte Blacklist; erweiterte Standardliste |
 | 2.9.0 | 2026-04-10 | Neu: Readings `responsePlain` (Markdown bereinigt) und `responseHTML` (Markdown zu HTML) |
 | 2.8.0 | 2026-04-10 | Fix: History-Trimming entfernt verwaiste `functionResponse`-User-Turns am Anfang des Verlaufs (API-Fehler 400, Issue #8) |

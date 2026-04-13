@@ -141,7 +141,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '3.0.0';
+    $hash->{VERSION}     = '3.1.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
