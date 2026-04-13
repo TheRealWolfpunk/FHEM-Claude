@@ -43,6 +43,9 @@
 #                    zusaetzlicher Claude-API-Aufruf noetig, was im Alltag
 #                    Tokens und damit laufende Kosten sparen kann.
 #                    Komplexere Faelle laufen weiterhin ueber Claude
+#   readingBlacklist - Leerzeichen-getrennte Liste von Reading-/Befehlsnamen,
+#                      die nicht an Claude uebermittelt werden; Wildcards (*)
+#                      werden unterstuetzt
 #   disableHistory - Chat-Verlauf deaktivieren (0/1); jede Anfrage wird als eigenstaendiges Gespraech behandelt
 #
 # Set-Befehle:
@@ -66,6 +69,10 @@
 ##############################################################################
 
 # Versionshistorie:
+# 1.2.0 - 2026-04-13  Neu: readingBlacklist-Attribut mit Wildcard-Support
+#                          fuer Device-/Control-Kontext und get_device_state;
+#                          zusaetzlich wird das comment-Attribut von Geraeten
+#                          in Device- und Control-Kontext uebernommen
 # 1.1.0 - 2026-04-12  Neu: Claude-Hybridbetrieb (Lokalmodus) mit
 #                          localControlResolver; viele einfache und
 #                          eindeutige Steuerbefehle werden lokal direkt
@@ -112,7 +119,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.1.0';
+my $MODULE_VERSION = '1.2.0';
 
 sub Claude_Initialize {
     my ($hash) = @_;
@@ -134,6 +141,7 @@ sub Claude_Initialize {
         'deviceContextMode:compact,detailed ' .
         'controlContextMode:compact,detailed ' .
         'localControlResolver:0,1 ' .
+        'readingBlacklist:textField-long ' .
         'deviceList:textField-long ' .
         'controlList:textField-long ' .
         'deviceRoom:textField-long ' .
@@ -700,6 +708,70 @@ sub Claude_GetMimeType {
 }
 
 ##############################################################################
+# Hilfsfunktionen fuer Blacklist von Readings/Befehlen
+##############################################################################
+sub Claude_GetBlacklist {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+
+    my @default = qw(
+        associatedWith eventTypes .associatedWith .eventTypes
+        localicons cmdIcon devStateIcon icon userReadings
+        stateFormat room_map IODev .mseclog
+        .computedReadings .updateHint .sortby
+        DEF FUUID FVERSION VERSION
+        OldValue OLDREADINGS CHANGED NOTIFYDEV
+        NR NTFY_ORDER
+        lastcmd Heap LoadAvg Uptime Wifi_*
+    );
+
+    my $attr = AttrVal($name, 'readingBlacklist', '');
+    my @custom = grep { defined $_ && $_ ne '' } split(/\s+/, $attr);
+
+    my %seen;
+    return grep { !$seen{$_}++ } (@default, @custom);
+}
+
+sub Claude_GlobMatch {
+    my ($str, $pattern) = @_;
+    return 0 unless defined $str && defined $pattern;
+
+    return 1 if $pattern eq '*';
+
+    my @parts = split(/\*/, $pattern, -1);
+    my $leadingWildcard  = ($pattern =~ /^\*/) ? 1 : 0;
+    my $trailingWildcard = ($pattern =~ /\*$/) ? 1 : 0;
+
+    my $prefix = $leadingWildcard  ? '' : shift @parts;
+    my $suffix = $trailingWildcard ? '' : pop @parts;
+
+    return 0 if length($prefix) && substr($str, 0, length($prefix)) ne $prefix;
+    return 0 if length($suffix) && substr($str, -length($suffix)) ne $suffix;
+
+    my $pos = length($prefix);
+    for my $part (@parts) {
+        next if $part eq '';
+        my $idx = index($str, $part, $pos);
+        return 0 if $idx < 0;
+        $pos = $idx + length($part);
+    }
+
+    return 1;
+}
+
+sub Claude_IsBlacklisted {
+    my ($name, @patterns) = @_;
+    return 0 unless defined $name;
+
+    for my $pattern (@patterns) {
+        next unless defined $pattern && $pattern ne '';
+        return 1 if Claude_GlobMatch($name, $pattern);
+    }
+
+    return 0;
+}
+
+##############################################################################
 # FHEM Device-Kontext fuer Claude aufbauen
 ##############################################################################
 sub Claude_GetRelevantReadings {
@@ -799,6 +871,7 @@ sub Claude_BuildDeviceContext {
     my $contextMode = AttrVal($name, 'deviceContextMode', 'detailed');
 
     my $context = "Aktueller Status der Smart-Home Geraete:\n";
+    my @blacklist = Claude_GetBlacklist($hash);
 
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -820,6 +893,7 @@ sub Claude_BuildDeviceContext {
 
             my @compactReadings;
             for my $reading (@selectedReadings) {
+                next if Claude_IsBlacklisted($reading, @blacklist);
                 next unless exists $dev->{READINGS}{$reading};
                 my $val = $dev->{READINGS}{$reading}{VAL} // '';
                 push @compactReadings, "    $reading: $val";
@@ -841,7 +915,7 @@ sub Claude_BuildDeviceContext {
 
             $context .= "  Klassen: " . join(', ', @classes) . "\n" if @classes;
 
-            for my $attrName (qw(room group alias model subType genericDeviceType)) {
+            for my $attrName (qw(room group alias comment model subType genericDeviceType)) {
                 my $attrVal = AttrVal($devName, $attrName, '');
                 $context .= "  $attrName: $attrVal\n" if $attrVal;
             }
@@ -867,6 +941,7 @@ sub Claude_BuildControlContext {
     return '' unless @devices;
 
     my $contextMode = AttrVal($name, 'controlContextMode', 'detailed');
+    my @blacklist = Claude_GetBlacklist($hash);
 
     my $context = "Verfuegbare Geraete zum Steuern:\n";
     for my $devName (@devices) {
@@ -876,7 +951,7 @@ sub Claude_BuildControlContext {
         my $traits = Claude_GetDeviceTraits($devName);
 
         my $commandMap = Claude_GetDeviceCommandMap($devName);
-        my @cmds = sort keys %{$commandMap};
+        my @cmds = grep { !Claude_IsBlacklisted($_, @blacklist) } sort keys %{$commandMap};
 
         my @capabilities;
         push @capabilities, 'light'   if $traits->{light};
@@ -887,10 +962,16 @@ sub Claude_BuildControlContext {
         my $cmdsStr = @cmds ? join(', ', @cmds[0 .. ($#cmds > 7 ? 7 : $#cmds)]) : 'unbekannt';
         my $capsStr = @capabilities ? join(', ', @capabilities) : 'generic';
 
+        my $comment = AttrVal($devName, 'comment', '');
+
         if ($contextMode eq 'compact') {
-            $context .= "  $alias (intern: $devName, Status: $state, Klassen: $capsStr)\n";
+            $context .= "  $alias (intern: $devName, Status: $state, Klassen: $capsStr)";
+            $context .= " -- Beschreibung: $comment" if $comment;
+            $context .= "\n";
         } else {
-            $context .= "  $alias (intern: $devName, Status: $state, Klassen: $capsStr) -- Befehle: $cmdsStr\n";
+            $context .= "  $alias (intern: $devName, Status: $state, Klassen: $capsStr)";
+            $context .= " -- Beschreibung: $comment" if $comment;
+            $context .= " -- Befehle: $cmdsStr\n";
         }
     }
 
@@ -3060,11 +3141,13 @@ sub Claude_HandleControlResponse {
                 $stateResult .= "Klassen: " . join(', ', @classes) . "\n" if @classes;
 
                 if (exists $dev->{READINGS}) {
+                    my @blacklist = Claude_GetBlacklist($hash);
                     my @selectedReadings = Claude_GetRelevantReadings($device, max => 6);
                     @selectedReadings = grep { $_ ne 'state' } @selectedReadings;
 
                     my @compactReadings;
                     for my $reading (@selectedReadings) {
+                        next if Claude_IsBlacklisted($reading, @blacklist);
                         next unless exists $dev->{READINGS}{$reading};
                         my $val = $dev->{READINGS}{$reading}{VAL} // '';
                         push @compactReadings, "  $reading: $val";
@@ -3323,6 +3406,13 @@ sub Claude_SendToolResults {
       Der lokale Resolver arbeitet bewusst konservativ und uebernimmt nur
       Befehle, die sicher und eindeutig aufloesbar sind. Freiere oder
       mehrdeutige Formulierungen bleiben deshalb beim Claude-Fallback.</li>
+    <li><b>readingBlacklist</b> - Leerzeichen-getrennte Liste von
+      Reading- oder Befehlsnamen, die nicht an Claude uebermittelt werden.
+      Wildcards mit <code>*</code> werden unterstuetzt, z. B.
+      <code>R-*</code> oder <code>Wifi_*</code>. Die Blacklist wird auf
+      Device-Kontext, Control-Kontext und das Tool
+      <code>get_device_state</code> angewendet. Zusaetzlich gibt es eine
+      interne Standard-Blacklist fuer technisch wenig hilfreiche Eintraege.</li>
     <li><b>deviceList</b> - Komma-getrennte Geraeteliste fuer askAboutDevices</li>
     <li><b>deviceRoom</b> - Komma-getrennte Raumliste; alle Geraete mit passendem
       FHEM-room-Attribut werden automatisch fuer askAboutDevices verwendet.

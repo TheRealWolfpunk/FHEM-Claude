@@ -1,5 +1,9 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on
+ - feature: 98_Claude.pm: readingBlacklist mit Wildcard-Support fuer
+                          Device-/Control-Kontext und get_device_state;
+                          comment-Attribut wird in Device- und
+                          Control-Kontext uebernommen
  - feature: 98_Claude.pm: Claude-Hybridbetrieb (Lokalmodus) mit
                           localControlResolver: lokale Direktausfuehrung
                           einfacher und eindeutiger Schaltbefehle ohne
