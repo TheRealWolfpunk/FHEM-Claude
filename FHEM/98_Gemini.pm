@@ -556,11 +556,33 @@ sub Gemini_GetBlacklist {
 sub Gemini_IsBlacklisted {
     my ($entry, @patterns) = @_;
     for my $pat (@patterns) {
-        my $regex = quotemeta($pat);
-        $regex =~ s/\\\*/.*/g;
-        return 1 if $entry =~ /^$regex$/;
+        return 1 if Gemini_GlobMatch($pat, $entry);
     }
     return 0;
+}
+
+# Einfacher Glob-Vergleich ohne Regex (kein Backtracking-Risiko)
+# Unterstuetzt nur * als Platzhalter fuer beliebig viele Zeichen
+sub Gemini_GlobMatch {
+    my ($pat, $str) = @_;
+    return ($str eq $pat) unless index($pat, '*') >= 0;
+    return 1 if $pat eq '*';
+
+    my @parts  = split(/\*/, $pat, -1);
+    my $prefix = shift @parts;
+    my $suffix = pop   @parts;
+
+    return 0 if length($prefix) && substr($str, 0, length($prefix)) ne $prefix;
+    return 0 if length($suffix) && substr($str, -length($suffix))   ne $suffix;
+
+    my $pos = length($prefix);
+    for my $mid (@parts) {
+        next unless length($mid);
+        my $found = index($str, $mid, $pos);
+        return 0 if $found < 0;
+        $pos = $found + length($mid);
+    }
+    return 1;
 }
 
 ##############################################################################
