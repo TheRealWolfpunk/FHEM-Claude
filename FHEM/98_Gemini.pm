@@ -939,6 +939,8 @@ sub Gemini_HandleControlResponse {
         return;
     }
 
+    Log3 $name, 5, "Gemini ($name): Control-Antwort raw: $data";
+
     utf8::downgrade($data, 1);
 
     my $result = eval { decode_json($data) };
