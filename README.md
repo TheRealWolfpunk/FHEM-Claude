@@ -1,6 +1,6 @@
 # FHEM-Claude
 
-Version: 1.2.0
+Version: 1.3.0
 
 FHEM-Modul zur Anbindung der Anthropic Claude AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl und mehr – direkt aus FHEM heraus.
 Dieses Modul ist ein Fork von https://github.com/ahlers2mi/FHEM-Gemini.
@@ -17,10 +17,13 @@ Wichtig für die Praxis: Wenn der `localControlResolver` aktiv ist, werden viele
 
 - 💬 Textfragen an Claude stellen
 - 🖼️ Bilder analysieren (Dateipfad)
+- 🗨️ Universeller `chat`-Befehl für allgemeine Fragen, Geräte-Status und Steuerung
 - 🏠 Smart-Home-Geräte per Sprachbefehl steuern
+- 🏘️ Steuerbare Geräte zusätzlich bequem über `controlRoom` nach Räumen freigeben
 - ⚡ Claude-Hybridbetrieb (Lokalmodus) mit lokalem Resolver und Claude-Fallback
 - 🚀 Viele einfache Befehle direkt lokal ausführen, ohne zusätzlichen API-Call
 - 📋 Geräte-Status abfragen und zusammenfassen lassen
+- 📊 Tokenverbrauch über Readings sichtbar (`promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`)
 - 🧹 Konfigurierbare `readingBlacklist` mit Wildcard-Support für kompaktere Kontexte
 - 📝 Optionales `comment`-Attribut der Geräte zusätzlich als semantische Beschreibung
 - 🔄 Multi-Turn Chat-Verlauf (optional deaktivierbar)
@@ -118,7 +121,15 @@ set ClaudeAI control Stelle die Heizung auf 21 Grad
 set ClaudeAI control Fahre alle Rolläden runter
 ```
 
-Nur Geräte aus `controlList` dürfen gesteuert werden.
+Steuerbar sind Geräte aus `controlList` sowie zusätzlich alle Geräte aus den in
+`controlRoom` eingetragenen Räumen.
+
+Alternativ können steuerbare Geräte auch raumbasiert freigegeben werden:
+
+```text
+attr ClaudeAI controlRoom Wohnzimmer,Küche
+set ClaudeAI control Schalte im Wohnzimmer das Licht aus
+```
 
 ### Readings und Befehle gezielt aus dem Kontext ausschließen
 
@@ -139,6 +150,28 @@ attr ClaudeAI readingBlacklist R-* Wifi_* battery
 
 Wenn bei FHEM-Geräten das Attribut `comment` gepflegt ist, wird dieses außerdem
 zusätzlich als Beschreibung in den Device- und Control-Kontext übernommen.
+
+### Universeller `chat`-Befehl
+
+Mit `chat` lässt sich ein einzelner Telegram-/Messenger-artiger Einstiegspunkt
+verwenden, ohne zwischen `ask`, `askAboutDevices` und `control` unterscheiden zu
+müssen.
+
+```text
+set ClaudeAI chat Wie warm ist es im Wohnzimmer?
+set ClaudeAI chat Schalte bitte die Stehlampe ein
+set ClaudeAI chat Was bedeutet die Fehlermeldung meiner Wallbox?
+```
+
+Verhalten:
+- wenn steuerbare Geräte über `controlList` und/oder `controlRoom`
+  konfiguriert sind, wird `chat` über die Control-Logik verarbeitet
+- dabei bleiben die Claude-spezifischen Spezialitäten des Forks erhalten:
+  lokaler Resolver, referenzielle Folgeanweisungen, Batch-Logik und Tool-Use
+- zusätzlich wird vorhandener Gerätekontext aus `deviceList`/`deviceRoom`
+  als Kontext mitgegeben, wenn er konfiguriert ist
+- wenn keine steuerbaren Geräte konfiguriert sind, verhält sich `chat` wie
+  eine normale Claude-Anfrage mit optionalem Gerätekontext
 
 ## Claude-Hybridbetrieb (Lokalmodus) mit lokalem Resolver
 
@@ -233,7 +266,8 @@ get ClaudeAI chatHistory
 | `localControlResolver` | Aktiviert den lokalen Resolver für den Claude-Hybridbetrieb (`0/1`); einfache und eindeutige `control`-Befehle werden direkt in FHEM ausgeführt, komplexere Fälle laufen weiter über Claude | `1` |
 | `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- oder Befehlsnamen, die nicht an Claude übermittelt werden; Wildcards wie `R-*` oder `Wifi_*` werden unterstützt; gilt für Device-/Control-Kontext und `get_device_state`; zusätzlich existiert eine interne Standard-Blacklist | – |
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
-| `controlList` | Komma-getrennte Liste der Geräte, die Claude steuern darf (Pflicht für `control`) | – |
+| `controlList` | Komma-getrennte Liste der Geräte, die Claude steuern darf; kann mit `controlRoom` kombiniert werden | – |
+| `controlRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch zusätzlich als steuerbar eingestuft | – |
 | `deviceRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch für `askAboutDevices` verwendet | – |
 | `systemPrompt` | Optionaler System-Prompt; längere Prompts erhöhen den mitgesendeten Kontext pro Anfrage | – |
 
@@ -250,6 +284,9 @@ get ClaudeAI chatHistory
 | `chatHistory` | Anzahl der Nachrichten im Chat-Verlauf |
 | `lastCommand` | Letzter ausgeführter `set`-Befehl (z. B. `Lampe1 on`) |
 | `lastCommandResult` | Ergebnis des letzten `set`-Befehls (`ok` oder Fehlermeldung) |
+| `promptTokenCount` | Anzahl der an Claude gesendeten Tokens (Input) |
+| `candidatesTokenCount` | Anzahl der von Claude generierten Tokens (Antwort) |
+| `totalTokenCount` | Gesamtsumme der verbrauchten Tokens (Input + Output) |
 
 ## Lizenz
 

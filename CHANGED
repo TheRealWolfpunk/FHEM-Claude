@@ -1,5 +1,14 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on
+ - feature: 98_Claude.pm: chat-Befehl fuer allgemeine Fragen,
+                          Geraete-Status und Steuerung in einem;
+                          controlRoom ergaenzt controlList um
+                          raumbasierte Freigabe steuerbarer Geraete
+ - feature: 98_Claude.pm: neue Token-Readings promptTokenCount,
+                          candidatesTokenCount und totalTokenCount
+ - change:  98_Claude.pm: Logging und Doku fuer Claude-Fork an
+                          Upstream angeglichen und Claude-spezifisch
+                          angepasst
  - feature: 98_Claude.pm: readingBlacklist mit Wildcard-Support fuer
                           Device-/Control-Kontext und get_device_state;
                           comment-Attribut wird in Device- und

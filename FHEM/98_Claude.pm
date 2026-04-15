@@ -36,6 +36,8 @@
 #   deviceRoom     - Komma-getrennte Raumliste; Geraete mit passendem room-Attribut
 #                    werden automatisch fuer askAboutDevices verwendet
 #   controlList    - Komma-getrennte Liste der Geraete, die Claude steuern darf
+#   controlRoom    - Komma-getrennte Raumliste; Geraete mit passendem room-Attribut
+#                    werden automatisch als steuerbar eingestuft (ergaenzt controlList)
 #   localControlResolver - Aktiviert den lokalen Resolver fuer den
 #                    Claude-Hybridbetrieb (Lokalmodus) (0/1); einfache und
 #                    eindeutige control-Befehle werden direkt in FHEM
@@ -52,6 +54,9 @@
 #   ask <Frage>                    - Textfrage stellen
 #   askWithImage <Pfad> <Frage>    - Bild + Frage senden
 #   askAboutDevices [<Frage>]      - Geraete-Statusabfrage
+#   chat <Nachricht>               - Universeller Befehl: allgemeine Fragen,
+#                                    Geraete-Status und Steuerung in einem
+#                                    (ideal fuer Telegram-Integration)
 #   control <Anweisung>            - Claude steuert Geraete via Tool Use
 #   resetChat                      - Chat-Verlauf loeschen
 #
@@ -65,10 +70,20 @@
 #   chatHistory        - Anzahl der Nachrichten im Verlauf
 #   lastCommand        - Letzter ausgefuehrter set-Befehl
 #   lastCommandResult  - Ergebnis des letzten set-Befehls
+#   candidatesTokenCount - Anzahl der von Claude generierten Tokens (Antwort)
+#   promptTokenCount     - Anzahl der an Claude gesendeten Tokens (Input)
+#   totalTokenCount      - Gesamtsumme der verbrauchten Tokens (Input + Output)
 #
 ##############################################################################
 
 # Versionshistorie:
+# 1.3.0 - 2026-04-15  Neu: Befehl chat fuer universelle Nachrichten
+#                          (allgemeine Fragen, Geraete-Status und Steuerung
+#                          in einem Befehl, ideal fuer Telegram-Integration);
+#                          neues Attribut controlRoom analog zu deviceRoom fuer
+#                          steuerbare Geraete; neue Token-Readings
+#                          promptTokenCount, candidatesTokenCount,
+#                          totalTokenCount
 # 1.2.0 - 2026-04-13  Neu: readingBlacklist-Attribut mit Wildcard-Support
 #                          fuer Device-/Control-Kontext und get_device_state;
 #                          zusaetzlich wird das comment-Attribut von Geraeten
@@ -119,7 +134,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.2.0';
+my $MODULE_VERSION = '1.3.0';
 
 sub Claude_Initialize {
     my ($hash) = @_;
@@ -144,6 +159,7 @@ sub Claude_Initialize {
         'readingBlacklist:textField-long ' .
         'deviceList:textField-long ' .
         'controlList:textField-long ' .
+        'controlRoom:textField-long ' .
         'deviceRoom:textField-long ' .
         'systemPrompt:textField-long ' .
         $readingFnAttributes;
@@ -177,6 +193,9 @@ sub Claude_Define {
     readingsSingleUpdate($hash, 'lastError',         '-',           0);
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
+    readingsSingleUpdate($hash, 'candidatesTokenCount', '-',        0);
+    readingsSingleUpdate($hash, 'promptTokenCount',     '-',        0);
+    readingsSingleUpdate($hash, 'totalTokenCount',      '-',        0);
     $hash->{LAST_CONTROLLED_DEVICES} = [];
     $hash->{LAST_CONTROL_BATCH}      = undef;
 
@@ -229,12 +248,24 @@ sub Claude_Set {
         Claude_SendRequest($hash, $question, undef, $deviceContext);
         return undef;
 
+    } elsif ($cmd eq 'chat') {
+        return "Usage: set $name chat <Nachricht>" unless @args;
+        my $message = join(' ', @args);
+        my @controlDevices = Claude_GetControlDevices($hash);
+        my $deviceContext = Claude_BuildDeviceContext($hash);
+        if (@controlDevices) {
+            Claude_SendControl($hash, $message, $deviceContext);
+        } else {
+            Claude_SendRequest($hash, $message, undef, $deviceContext || undef);
+        }
+        return undef;
+
     } elsif ($cmd eq 'control') {
         return "Usage: set $name control <Anweisung>" unless @args;
-        my $controlList = AttrVal($name, 'controlList', '');
-        return "Fehler: Attribut controlList ist nicht gesetzt" unless $controlList;
+        my @controlDevices = Claude_GetControlDevices($hash);
+        return "Fehler: Weder controlList noch controlRoom ist gesetzt" unless @controlDevices;
         my $instruction = join(' ', @args);
-        Claude_SendControl($hash, $instruction);
+        Claude_SendControl($hash, $instruction, undef);
         return undef;
 
     } elsif ($cmd eq 'resetChat') {
@@ -247,7 +278,7 @@ sub Claude_Set {
         return undef;
 
     } else {
-        return "Unknown argument $cmd, choose one of ask:textField askWithImage:textField askAboutDevices:textField control:textField resetChat:noArg";
+        return "Unknown argument $cmd, choose one of ask:textField askWithImage:textField askAboutDevices:textField chat:textField control:textField resetChat:noArg";
     }
 }
 
@@ -492,6 +523,8 @@ sub Claude_HandleResponse {
 
     utf8::downgrade($data, 1);
 
+    Log3 $name, 5, "Claude ($name): Antwort raw: $data";
+
     my $result = eval { decode_json($data) };
     if ($@) {
         readingsSingleUpdate($hash, 'lastError', "JSON Parse Fehler: $@", 1);
@@ -499,6 +532,15 @@ sub Claude_HandleResponse {
         Log3 $name, 1, "Claude ($name): JSON Parse Fehler: $@";
         pop @{$hash->{CHAT}};
         return;
+    }
+
+    if (exists $result->{usage}) {
+        my $inputTokens  = $result->{usage}{input_tokens};
+        my $outputTokens = $result->{usage}{output_tokens};
+        my $totalTokens  = (defined $inputTokens ? $inputTokens : 0) + (defined $outputTokens ? $outputTokens : 0);
+        readingsSingleUpdate($hash, 'promptTokenCount',     defined $inputTokens  ? $inputTokens  : '-', 1);
+        readingsSingleUpdate($hash, 'candidatesTokenCount', defined $outputTokens ? $outputTokens : '-', 1);
+        readingsSingleUpdate($hash, 'totalTokenCount',      $totalTokens, 1);
     }
 
     if (exists $result->{model}) {
@@ -930,14 +972,51 @@ sub Claude_BuildDeviceContext {
 ##############################################################################
 # Hilfsfunktion: Geraetekontext fuer control-Befehl aufbauen
 ##############################################################################
+sub Claude_GetControlDevices {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+
+    my %seen;
+    my @devices;
+
+    my $controlRoom = AttrVal($name, 'controlRoom', '');
+    if ($controlRoom) {
+        my @rooms = split(/\s*,\s*/, $controlRoom);
+        for my $devName (sort keys %main::defs) {
+            my $devRoomAttr = AttrVal($devName, 'room', '');
+            for my $room (@rooms) {
+                if (grep { $_ eq $room } split(/\s*,\s*/, $devRoomAttr)) {
+                    unless ($seen{$devName}) {
+                        push @devices, $devName;
+                        $seen{$devName} = 1;
+                    }
+                    last;
+                }
+            }
+        }
+    }
+
+    my $controlList = AttrVal($name, 'controlList', '');
+    if ($controlList) {
+        for my $devName (split(/\s*,\s*/, $controlList)) {
+            unless ($seen{$devName}) {
+                push @devices, $devName;
+                $seen{$devName} = 1;
+            }
+        }
+    }
+
+    return grep { exists $main::defs{$_} } @devices;
+}
+
+##############################################################################
+# Hilfsfunktion: Geraetekontext fuer control-Befehl aufbauen
+##############################################################################
 sub Claude_BuildControlContext {
     my ($hash) = @_;
     my $name = $hash->{NAME};
 
-    my $controlList = AttrVal($name, 'controlList', '');
-    return '' unless $controlList;
-
-    my @devices = split(/\s*,\s*/, $controlList);
+    my @devices = Claude_GetControlDevices($hash);
     return '' unless @devices;
 
     my $contextMode = AttrVal($name, 'controlContextMode', 'detailed');
@@ -1138,6 +1217,7 @@ sub Claude_RollbackControlSession {
     delete $hash->{CONTROL_START_IDX};
     delete $hash->{CONTROL_SUCCESSFUL_DEVICES};
     delete $hash->{CONTROL_SUCCESSFUL_COMMANDS};
+    delete $hash->{CHAT_EXTRA_CONTEXT};
 }
 
 sub Claude_BuildLastControlledContext {
@@ -1202,6 +1282,7 @@ sub Claude_BuildControlSystemPrompt {
     my $name = $hash->{NAME};
 
     my $systemPrompt            = AttrVal($name, 'systemPrompt', '');
+    my $extraContext            = $hash->{CHAT_EXTRA_CONTEXT} // '';
     my $controlContext          = $includeControlContext ? Claude_BuildControlContext($hash) : '';
     my $lastControlledContext   = Claude_BuildLastControlledContext($hash);
     my $lastControlBatchContext = Claude_BuildLastControlBatchContext($hash);
@@ -1209,6 +1290,7 @@ sub Claude_BuildControlSystemPrompt {
     my @systemParts;
     push @systemParts, $systemPrompt if $systemPrompt ne '';
     push @systemParts, "Steuerregeln:\n- Verweise wie sie/die/diese/wieder/nochmal bevorzugt auf die letzte gemeinsame Zielmenge beziehen.\n- Niemals Tool-Aufrufe mit leerem device oder command erzeugen.\n- Bei Unklarheit bevorzugt die letzte gemeinsame Zielmenge statt nur eines Einzelgeraets nutzen.\n- Wenn weiter unklar, nur eindeutig bestimmbare Geraete verwenden.\n- Nach Erfolg genau 1 kurzen Satz antworten.\n- Keine Geraetelisten ausgeben, ausser bei explizitem Wunsch.\n- Bevorzuge kurze Sammelformulierungen wie 'Die Wohnzimmerbeleuchtung ist jetzt aus.'";
+    push @systemParts, $extraContext if $extraContext ne '';
     push @systemParts, $lastControlBatchContext if $lastControlBatchContext ne '';
     push @systemParts, $lastControlledContext if $lastControlledContext ne '';
     push @systemParts, $controlContext if $controlContext ne '';
@@ -1230,17 +1312,6 @@ sub Claude_NormalizeText {
     $text =~ s/^\s+|\s+$//g;
 
     return $text;
-}
-
-sub Claude_GetControlDevices {
-    my ($hash) = @_;
-    my $name = $hash->{NAME};
-
-    my $controlList = AttrVal($name, 'controlList', '');
-    return () unless $controlList;
-
-    my @devices = grep { defined $_ && $_ ne '' } split(/\s*,\s*/, $controlList);
-    return grep { exists $main::defs{$_} } @devices;
 }
 
 sub Claude_GetDeviceTraits {
@@ -2759,8 +2830,7 @@ sub Claude_ExecuteReferentialBatchLocally {
     my @successfulCommands;
     my @executedLines;
 
-    my $controlList = AttrVal($name, 'controlList', '');
-    my %allowed     = map { $_ => 1 } split(/\s*,\s*/, $controlList);
+    my %allowed = map { $_ => 1 } Claude_GetControlDevices($hash);
 
     for my $device (@$devices) {
         next unless defined $device && $device ne '';
@@ -2820,7 +2890,7 @@ sub Claude_ExecuteReferentialBatchLocally {
 # Control-Funktion: Geraet steuern via Claude Tool Use
 ##############################################################################
 sub Claude_SendControl {
-    my ($hash, $instruction) = @_;
+    my ($hash, $instruction, $extraContext) = @_;
     my $name = $hash->{NAME};
     my $originalInstruction = $instruction;
 
@@ -2858,6 +2928,8 @@ sub Claude_SendControl {
     Log3 $name, 4, "Claude ($name): Expandierte Folgeanweisung von '$originalInstruction' zu '$instruction'" if $instruction ne $originalInstruction;
 
     $hash->{LAST_CONTROL_INSTRUCTION} = $originalInstruction;
+
+    $hash->{CHAT_EXTRA_CONTEXT} = $extraContext // '';
 
     push @{$hash->{CHAT}}, {
         role    => 'user',
@@ -2945,6 +3017,8 @@ sub Claude_HandleControlResponse {
 
     utf8::downgrade($data, 1);
 
+    Log3 $name, 5, "Claude ($name): Antwort raw: $data";
+
     my $result = eval { decode_json($data) };
     if ($@) {
         readingsSingleUpdate($hash, 'lastError', "JSON Parse Fehler: $@", 1);
@@ -2952,6 +3026,15 @@ sub Claude_HandleControlResponse {
         Log3 $name, 1, "Claude ($name): JSON Parse Fehler: $@";
         Claude_RollbackControlSession($hash);
         return;
+    }
+
+    if (exists $result->{usage}) {
+        my $inputTokens  = $result->{usage}{input_tokens};
+        my $outputTokens = $result->{usage}{output_tokens};
+        my $totalTokens  = (defined $inputTokens ? $inputTokens : 0) + (defined $outputTokens ? $outputTokens : 0);
+        readingsSingleUpdate($hash, 'promptTokenCount',     defined $inputTokens  ? $inputTokens  : '-', 1);
+        readingsSingleUpdate($hash, 'candidatesTokenCount', defined $outputTokens ? $outputTokens : '-', 1);
+        readingsSingleUpdate($hash, 'totalTokenCount',      $totalTokens, 1);
     }
 
     if (exists $result->{model}) {
@@ -3024,8 +3107,7 @@ sub Claude_HandleControlResponse {
                 next;
             }
 
-            my $controlList = AttrVal($name, 'controlList', '');
-            my %allowed     = map { $_ => 1 } split(/\s*,\s*/, $controlList);
+            my %allowed = map { $_ => 1 } Claude_GetControlDevices($hash);
 
             if ($allowed{$device} && exists $main::defs{$device}) {
                 my ($toolCommandName) = split(/\s+/, $command, 2);
@@ -3222,6 +3304,7 @@ sub Claude_HandleControlResponse {
 
     Claude_FinalizeRememberedControlSession($hash);
     delete $hash->{CONTROL_START_IDX};
+    delete $hash->{CHAT_EXTRA_CONTEXT};
 
     my $responseForReading = $responseUnicode;
     utf8::encode($responseForReading) if utf8::is_utf8($responseForReading);
@@ -3419,12 +3502,17 @@ sub Claude_SendToolResults {
       Beispiel: <code>attr ClaudeAI deviceRoom Wohnzimmer,Kueche</code>.
       Kann zusammen mit <b>deviceList</b> verwendet werden.</li>
     <li><b>controlList</b> - Komma-getrennte Liste der Geraete, die Claude per
-      Tool Use steuern darf (Pflicht fuer den control-Befehl).
-      Alias-Namen und verfuegbare set-Befehle der Geraete werden automatisch
-      an Claude uebermittelt, sodass Sprachbefehle mit Alias-Namen und
-      passende Befehle automatisch erkannt werden. Eine kompakte und sinnvoll
-      begrenzte Liste haelt den gesendeten Kontext ueberschaubar.
-      Beispiel: <code>attr ClaudeAI controlList Lampe1,Heizung,Rolladen1</code></li>
+      Tool Use steuern darf. Kann zusammen mit <b>controlRoom</b> verwendet
+      werden. Alias-Namen und verfuegbare set-Befehle der Geraete werden
+      automatisch an Claude uebermittelt, sodass Sprachbefehle mit
+      Alias-Namen und passende Befehle automatisch erkannt werden. Eine
+      kompakte und sinnvoll begrenzte Liste haelt den gesendeten Kontext
+      ueberschaubar. Beispiel:
+      <code>attr ClaudeAI controlList Lampe1,Heizung,Rolladen1</code></li>
+    <li><b>controlRoom</b> - Komma-getrennte Raumliste; Geraete mit passendem
+      <code>room</code>-Attribut werden automatisch als steuerbar eingestuft.
+      Kann zusammen mit <b>controlList</b> verwendet werden. Beispiel:
+      <code>attr ClaudeAI controlRoom Wohnzimmer,Kueche</code></li>
   </ul><br>
 
   <b>Set</b><br>
@@ -3432,6 +3520,12 @@ sub Claude_SendToolResults {
     <li><b>ask</b> <Frage> - Textfrage stellen</li>
     <li><b>askWithImage</b> <Bildpfad> <Frage> - Bild + Frage senden</li>
     <li><b>askAboutDevices</b> [<Frage>] - Geraete-Status an Claude uebergeben und Frage stellen</li>
+    <li><b>chat</b> <Nachricht> - Universeller Befehl fuer allgemeine Fragen,
+      Geraete-Status und Steuerung in einem. Wenn steuerbare Geraete per
+      <b>controlList</b> und/oder <b>controlRoom</b> konfiguriert sind, wird die
+      Nachricht ueber die Control-Logik verarbeitet; andernfalls als normale
+      Anfrage mit optionalem Geraetekontext. Besonders praktisch fuer
+      Telegram- oder Notify-Integrationen.</li>
     <li><b>control</b> <Anweisung> - Steuert FHEM-Geraete per Sprachbefehl.
       Im Standard arbeitet das Modul im Claude-Hybridbetrieb (Lokalmodus):
       viele einfache Standardbefehle werden direkt lokal in FHEM ausgefuehrt,
@@ -3439,7 +3533,8 @@ sub Claude_SendToolResults {
       uebernimmt. Dadurch sind typische Schaltvorgaenge oft ohne zusaetzlichen
       API-Aufruf moeglich, was im Alltag Tokens und damit Kosten sparen kann.
       Beispiel: <code>set ClaudeAI control Mach die Wohnzimmerlampe an</code>.
-      Nur Geraete aus <b>controlList</b> duerfen gesteuert werden.</li>
+      Gesteuert werden duerfen nur Geraete aus <b>controlList</b> und/oder den
+      ueber <b>controlRoom</b> einbezogenen Raeumen.</li>
     <li><b>resetChat</b> - Chat-Verlauf loeschen</li>
   </ul><br>
 
@@ -3459,6 +3554,9 @@ sub Claude_SendToolResults {
     <li><b>chatHistory</b> - Anzahl der Nachrichten im Chat-Verlauf</li>
     <li><b>lastCommand</b> - Letzter ausgefuehrter set-Befehl (z.B. <code>Lampe1 on</code>)</li>
     <li><b>lastCommandResult</b> - Ergebnis des letzten set-Befehls (<code>ok</code> oder Fehlermeldung)</li>
+    <li><b>candidatesTokenCount</b> - Anzahl der von Claude generierten Tokens (Antwort)</li>
+    <li><b>promptTokenCount</b> - Anzahl der an Claude gesendeten Tokens (Input)</li>
+    <li><b>totalTokenCount</b> - Gesamtsumme der verbrauchten Tokens (Input + Output)</li>
   </ul><br>
 </ul>
 
