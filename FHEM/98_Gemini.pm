@@ -1310,6 +1310,9 @@ sub Gemini_SendFunctionResult {
     <li><b>chatHistory</b> - Anzahl der Nachrichten im Chat-Verlauf</li>
     <li><b>lastCommand</b> - Letzter ausgefuehrter set-Befehl (z.B. <code>Lampe1 on</code>)</li>
     <li><b>lastCommandResult</b> - Ergebnis des letzten set-Befehls (<code>ok</code> oder Fehlermeldung)</li>
+    <li><b>candidatesTokenCount</b> - Anzahl der vom Modell generierten Tokens (Antwort)</li>
+    <li><b>promptTokenCount</b> - Anzahl der gesendeten Tokens (deine Frage/Input)</li>
+    <li><b>totalTokenCount</b> - Gesamtsumme der verbrauchten Tokens (Input + Output)</li>                      
   </ul>
 </ul>
 
