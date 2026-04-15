@@ -370,6 +370,7 @@ attr global verbose 3
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 3.3.0 | 2026-04-15 | Metadatareadings candidatesTokenCount, promptTokenCount, totalTokenCount
 | 3.2.0 | 2026-04-13 | Neuer Befehl `chat`: universeller Befehl für allgemeine Fragen, Geräte-Status und Steuerung in einem (ideal für Telegram); neues Attribut `controlRoom`: steuerbare Geräte per Raum angeben (analog zu `deviceRoom`) |
 | 3.1.0 | 2026-04-13 | `comment`-Attribut der Geräte wird jetzt an Gemini übermittelt (in `askAboutDevices` und `control`) |
 | 3.0.0 | 2026-04-13 | Neues Attribut `readingBlacklist`: konfigurierbare Filterliste für Readings und set-Befehle mit Wildcard-Unterstützung (`*`); ersetzt die hardcodierte Blacklist; erweiterte Standardliste |
