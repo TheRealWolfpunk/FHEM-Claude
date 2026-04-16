@@ -131,7 +131,8 @@ sub Gemini_prefix {
     addToDevAttrList($_, "${prefix}Comment:textField-long",'Gemini');    
 
     return if !$init_done || !defined $old_prefix;
- 
+
+    my @devs = devspec2array("$hash->{devspec}");
     my @geminis = devspec2array("TYPE=Gemini:FILTER=prefix=$old_prefix");
 
     for my $detail ( qw( apiKey model maxHistory timeout disable disableHistory deviceList controlList controlRoom deviceRoom systemPrompt readingBlacklist ) ) { 
