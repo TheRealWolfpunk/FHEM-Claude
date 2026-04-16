@@ -126,6 +126,10 @@ sub Gemini_prefix {
     my $prefix =  shift // q{Gemini};
     my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
 
+
+    Log3 $name, 3, "Gemini ($name): Prefix: $prefix";
+    Log3 $name, 3, "Gemini ($name): Oldprefix: $old_prefix" if defined $old_prefix;
+
     return if defined $old_prefix && $prefix eq $old_prefix;
     # provide attributes "GeminiName" etc. for all devices
     addToAttrList("${prefix}Comment:textField-long",'Gemini');    
