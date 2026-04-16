@@ -128,8 +128,8 @@ use MIME::Base64;
 #    my $name = $hash->{NAME};
 #
 #
-#    Log3 $name, 3, "Gemini ($name): Prefix: $prefix";
-#    Log3 $name, 3, "Gemini ($name): Oldprefix: $old_prefix" if defined $old_prefix;
+#    Log3 $name, 5, "Gemini ($name): Prefix: $prefix";
+#    Log3 $name, 5, "Gemini ($name): Oldprefix: $old_prefix" if defined $old_prefix;
 #
 #    return if defined $old_prefix && $prefix eq $old_prefix;
 #    # provide attributes "GeminiName" etc. for all devices
@@ -191,7 +191,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '3.4.0';
+    $hash->{VERSION}     = '3.4.1';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -714,7 +714,7 @@ sub Gemini_BuildDeviceContext {
         my $dev   = $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
 
-        Log3 $name, 3, "Gemini ($name): Alias " . $alias;
+        Log3 $name, 5, "Gemini ($name): Alias " . $alias;
 
         $context .= "\nGerät: $alias (intern: $devName)\n";
         $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
@@ -740,7 +740,7 @@ sub Gemini_BuildDeviceContext {
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
 
-        Log3 $name, 3, "Gemini ($name): " . $alias . ": " . $context;
+        Log3 $name, 5, "Gemini ($name): " . $alias . ": " . $context;
     }
 
     return $context;
@@ -1273,7 +1273,7 @@ sub Gemini_SendFunctionResult {
 =item device
 =item summary Google Gemini AI integration for FHEM
 =item summary_DE Google Gemini KI Anbindung fuer FHEM
-
+a
 =begin html
 
 <a name="Gemini"></a>
