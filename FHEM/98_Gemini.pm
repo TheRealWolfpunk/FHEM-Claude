@@ -123,7 +123,7 @@ use MIME::Base64;
 
 sub Gemini_prefix {
     my $hash   = shift // return;
-    my $prefix =  shift // q{geminis};
+    my $prefix =  shift // q{gemini};
     my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
 
     return if defined $old_prefix && $prefix eq $old_prefix;
@@ -171,12 +171,12 @@ sub Gemini_Initialize {
         $readingFnAttributes;
 
 
-    addToDevAttrList("global", $hash->{NAME} . "Comment:textField-long");
+#    addToDevAttrList("global", $hash->{NAME} . "Comment:textField-long");
     return undef;
 }
 
 sub Gemini_Define {
-    my ($hash, $def) = @_;
+    my ($hash, $def, $h) = @_;
     my @args = split('[ \t]+', $def);
 
     return "Usage: define <name> Gemini" if (@args < 2);
@@ -192,6 +192,8 @@ sub Gemini_Define {
     readingsSingleUpdate($hash, 'lastError',         '-',           0);
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
+
+    Gemini_prefix($hash, $h->{prefix}) if !defined $hash->{prefix} || defined $h->{prefix} && $hash->{prefix} ne $h->{prefix};
 
     Log3 $name, 3, "Gemini ($name): Defined";
     return undef;
