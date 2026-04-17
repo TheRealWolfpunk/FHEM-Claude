@@ -3,6 +3,7 @@
 Version: 1.3.0
 
 FHEM-Modul zur Anbindung der Anthropic Claude AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl und mehr – direkt aus FHEM heraus.
+
 Dieses Modul ist ein Fork von https://github.com/ahlers2mi/FHEM-Gemini.
 
 ### API-Kosten & Credits
@@ -151,6 +152,21 @@ attr ClaudeAI readingBlacklist R-* Wifi_* battery
 Wenn bei FHEM-Geräten das Attribut `comment` gepflegt ist, wird dieses außerdem
 zusätzlich als Beschreibung in den Device- und Control-Kontext übernommen.
 
+Zusätzlich kann pro Claude-Instanz ein instanzspezifisches Attribut wie
+`ClaudeAIInstructions` verwendet werden (bei einer Instanz mit dem Namen
+`ClaudeAI`). Dieses Attribut dient fuer geraetespezifische Anweisungen nur fuer
+diese Claude-Instanz und wird zusaetzlich in den Device- und Control-Kontext
+uebernommen.
+
+Beispiel:
+
+```text
+attr LampeWohnzimmer ClaudeAIInstructions Die Lampe steht links neben dem Sofa und ist die Hauptbeleuchtung fuer den Raum.
+```
+
+Damit lassen sich Claude gezielt zusaetzliche semantische Hinweise pro Geraet
+geben, ohne die allgemeinen Device-Attribute zu ueberladen.
+
 ### Universeller `chat`-Befehl
 
 Mit `chat` lässt sich ein einzelner Telegram-/Messenger-artiger Einstiegspunkt
@@ -270,6 +286,7 @@ get ClaudeAI chatHistory
 | `controlRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch zusätzlich als steuerbar eingestuft | – |
 | `deviceRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch für `askAboutDevices` verwendet | – |
 | `systemPrompt` | Optionaler System-Prompt; längere Prompts erhöhen den mitgesendeten Kontext pro Anfrage | – |
+| `<Instanzname>Instructions` | Instanzspezifisches Geräteattribut pro Claude-Instanz, z. B. `ClaudeAIInstructions`; ergänzt geraetespezifische Anweisungen fuer genau diese Claude-Instanz im Device- und Control-Kontext | – |
 
 ## Readings
 
