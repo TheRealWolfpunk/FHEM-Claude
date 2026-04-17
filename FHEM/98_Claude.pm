@@ -77,6 +77,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 1.3.1 - 2026-04-17  Neu: instanzspezifisches Attribut <Instanzname>Instructions
+#                          fuer geraetespezifische Claude-Anweisungen im Device-
+#                          und Control-Kontext; Logging bereinigt
 # 1.3.0 - 2026-04-15  Neu: Befehl chat fuer universelle Nachrichten
 #                          (allgemeine Fragen, Geraete-Status und Steuerung
 #                          in einem Befehl, ideal fuer Telegram-Integration);
@@ -134,7 +137,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.3.0';
+my $MODULE_VERSION = '1.3.1';
 
 sub Claude_Initialize {
     my ($hash) = @_;
@@ -202,6 +205,8 @@ sub Claude_Define {
     if (!defined AttrVal($name, 'localControlResolver', undef)) {
         CommandAttr(undef, "$name localControlResolver 1");
     }
+
+    addToAttrList($hash->{NAME} . "Instructions:textField-long", "Claude");
 
     Log3 $name, 3, "Claude ($name): Defined";
     return undef;
@@ -957,13 +962,14 @@ sub Claude_BuildDeviceContext {
 
             $context .= "  Klassen: " . join(', ', @classes) . "\n" if @classes;
 
-            for my $attrName (qw(room group alias comment model subType genericDeviceType)) {
+            my @attributes = ('room', 'group', 'alias', 'comment', $hash->{NAME} . 'Instructions', 'model', 'subType', 'genericDeviceType');
+            for my $attrName (@attributes) {
                 my $attrVal = AttrVal($devName, $attrName, '');
                 $context .= "  $attrName: $attrVal\n" if $attrVal;
             }
         }
 
-        Log3 $name, 4, "Claude ($name): " . $alias . ": " . $context;
+        Log3 $name, 5, "Claude ($name): Device-Kontext fuer $alias aufgebaut";
     }
 
     return $context;
@@ -1042,14 +1048,17 @@ sub Claude_BuildControlContext {
         my $capsStr = @capabilities ? join(', ', @capabilities) : 'generic';
 
         my $comment = AttrVal($devName, 'comment', '');
+        my $claudeInstructions = AttrVal($devName, $name . 'Instructions', '');
 
         if ($contextMode eq 'compact') {
             $context .= "  $alias (intern: $devName, Status: $state, Klassen: $capsStr)";
-            $context .= " -- Beschreibung: $comment" if $comment;
+            $context .= " -- Allgemeine Beschreibung: $comment" if $comment;
+            $context .= " -- Anweisungen fuer Claude: $claudeInstructions" if $claudeInstructions;
             $context .= "\n";
         } else {
             $context .= "  $alias (intern: $devName, Status: $state, Klassen: $capsStr)";
-            $context .= " -- Beschreibung: $comment" if $comment;
+            $context .= " -- Allgemeine Beschreibung: $comment" if $comment;
+            $context .= " -- Anweisungen fuer Claude: $claudeInstructions" if $claudeInstructions;
             $context .= " -- Befehle: $cmdsStr\n";
         }
     }
@@ -3496,6 +3505,11 @@ sub Claude_SendToolResults {
       Device-Kontext, Control-Kontext und das Tool
       <code>get_device_state</code> angewendet. Zusaetzlich gibt es eine
       interne Standard-Blacklist fuer technisch wenig hilfreiche Eintraege.</li>
+    <li><b><Instanzname>Instructions</b> - Optionales Attribut an beliebigen
+      FHEM-Geraeten, z. B. <code>ClaudeAIInstructions</code>. Damit lassen sich
+      geraetespezifische Anweisungen nur fuer diese Claude-Instanz hinterlegen.
+      Das Attribut wird zusaetzlich zum allgemeinen <code>comment</code> in
+      den Device- und Control-Kontext uebernommen.</li>
     <li><b>deviceList</b> - Komma-getrennte Geraeteliste fuer askAboutDevices</li>
     <li><b>deviceRoom</b> - Komma-getrennte Raumliste; alle Geraete mit passendem
       FHEM-room-Attribut werden automatisch fuer askAboutDevices verwendet.

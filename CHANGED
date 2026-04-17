@@ -1,5 +1,8 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on
+ - feature: 98_Claude.pm: instanzspezifisches Attribut <Instanzname>Instructions
+                          fuer geraetespezifische Claude-Anweisungen im
+                          Device- und Control-Kontext
  - feature: 98_Claude.pm: chat-Befehl fuer allgemeine Fragen,
                           Geraete-Status und Steuerung in einem;
                           controlRoom ergaenzt controlList um
