@@ -10,9 +10,11 @@ Dieses Modul ist ein Fork von https://github.com/ahlers2mi/FHEM-Gemini.
 
 Dieses Modul nutzt das Prepaid-System von Anthropic. Standardmäßig ist das Modell **claude-haiku-4-5** hinterlegt, weil es aktuell das kostengünstigste Claude-Modell ist und für typische Hausautomations-Anfragen in der Regel ein sehr passendes Verhältnis aus Leistung und laufenden Kosten bietet.
 
-Pro 1.000 durchschnittlichen Interaktionen (Statusabfragen oder Schaltbefehle) fallen grob etwa **1,50 $** an. Ein Startguthaben von **5 $** reicht damit oft bereits für über 3.000 Anfragen. Bei einer täglichen Nutzung von 10 Befehlen kann das für rund **10 Monate** ausreichen. Der tatsächliche Verbrauch hängt vom Umfang deiner FHEM-Geräteliste, vom gesendeten Kontext und von der Komplexität der Aufgaben ab.
+Als grobe Orientierung für typische, eher kurze Statusabfragen oder einfache Schaltbefehle mit **claude-haiku-4-5** kann man häufig mit etwa **bis zu 3.000 Anfragen pro 5 $** rechnen. In sehr sparsamen Setups mit kleinem Kontext kann auch mehr möglich sein, bei größerem Gerätekontext, längeren Chat-Verläufen oder komplexeren Aufgaben aber auch deutlich weniger.
 
-Wichtig für die Praxis: Wenn der `localControlResolver` aktiv ist, werden viele einfache und eindeutige Steuerbefehle direkt lokal in FHEM ausgeführt. Für diese Fälle ist kein zusätzlicher Claude-API-Aufruf nötig. Das spart im Alltag Tokens und damit laufende Kosten spürbar, sodass die Nutzung von Claude in FHEM für typische Steueraufgaben meist gut bezahlbar bleibt.
+Wichtig: Diese Angabe ist nur eine unverbindliche Grobabschätzung und keine Zusage. Der tatsächliche Verbrauch hängt unter anderem vom Umfang deiner FHEM-Geräteliste, vom gesendeten Kontext, von Chat-Historie, Zusatzinformationen wie `comment` oder `<Instanzname>Instructions`, vom verwendeten Modell sowie von der Komplexität der Anfragen ab.
+
+Wichtig für die Praxis: Wenn der `localControlResolver` aktiv ist, werden viele einfache und eindeutige Steuerbefehle direkt lokal in FHEM ausgeführt. Für diese Fälle ist kein zusätzlicher Claude-API-Aufruf nötig. Das spart im Alltag Tokens und damit laufende Kosten spürbar, sodass die reale Anzahl möglicher Befehle pro 5 $ in typischen Steuerungsszenarien oft eher besser ausfallen kann als bei rein API-basierter Nutzung.
 
 ## Features
 
@@ -154,18 +156,18 @@ zusätzlich als Beschreibung in den Device- und Control-Kontext übernommen.
 
 Zusätzlich kann pro Claude-Instanz ein instanzspezifisches Attribut wie
 `ClaudeAIInstructions` verwendet werden (bei einer Instanz mit dem Namen
-`ClaudeAI`). Dieses Attribut dient fuer geraetespezifische Anweisungen nur fuer
-diese Claude-Instanz und wird zusaetzlich in den Device- und Control-Kontext
-uebernommen.
+`ClaudeAI`). Dieses Attribut dient für gerätespezifische Anweisungen nur für
+diese Claude-Instanz und wird zusätzlich in den Device- und Control-Kontext
+übernommen.
 
 Beispiel:
 
 ```text
-attr LampeWohnzimmer ClaudeAIInstructions Die Lampe steht links neben dem Sofa und ist die Hauptbeleuchtung fuer den Raum.
+attr LampeWohnzimmer ClaudeAIInstructions Die Lampe steht links neben dem Sofa und ist die Hauptbeleuchtung für den Raum.
 ```
 
-Damit lassen sich Claude gezielt zusaetzliche semantische Hinweise pro Geraet
-geben, ohne die allgemeinen Device-Attribute zu ueberladen.
+Damit lassen sich Claude gezielt zusätzliche semantische Hinweise pro Gerät
+geben, ohne die allgemeinen Device-Attribute zu überladen.
 
 ### Universeller `chat`-Befehl
 
@@ -286,7 +288,7 @@ get ClaudeAI chatHistory
 | `controlRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch zusätzlich als steuerbar eingestuft | – |
 | `deviceRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch für `askAboutDevices` verwendet | – |
 | `systemPrompt` | Optionaler System-Prompt; längere Prompts erhöhen den mitgesendeten Kontext pro Anfrage | – |
-| `<Instanzname>Instructions` | Instanzspezifisches Geräteattribut pro Claude-Instanz, z. B. `ClaudeAIInstructions`; ergänzt geraetespezifische Anweisungen fuer genau diese Claude-Instanz im Device- und Control-Kontext | – |
+| `<Instanzname>Instructions` | Instanzspezifisches Geräteattribut pro Claude-Instanz, z. B. `ClaudeAIInstructions`; ergänzt gerätespezifische Anweisungen für genau diese Claude-Instanz im Device- und Control-Kontext | – |
 
 ## Readings
 
@@ -304,6 +306,14 @@ get ClaudeAI chatHistory
 | `promptTokenCount` | Anzahl der an Claude gesendeten Tokens (Input) |
 | `candidatesTokenCount` | Anzahl der von Claude generierten Tokens (Antwort) |
 | `totalTokenCount` | Gesamtsumme der verbrauchten Tokens (Input + Output) |
+
+## Hinweise zu Kosten und Haftung
+
+Die Nutzung der Anthropic-Claude-API erfolgt auf eigene Verantwortung. Sämtliche durch die API-Nutzung entstehenden Kosten hängen von deinem individuellen Setup, den verwendeten Modellen, dem übermittelten Kontext sowie deinem Nutzungsverhalten ab und können im Einzelfall deutlich von den im README genannten Groborientierungen abweichen.
+
+Weder das Open-Source-Community-Projekt FHEM noch dessen Mitwirkende oder der Autor dieses Moduls übernehmen eine Gewähr oder Haftung für entstehende API-Kosten, unerwartet hohen Tokenverbrauch, Fehlkonfigurationen, ungünstige Prompts, zu großen oder unnötigen Kontext, Fehler im Modul, Veränderungen an der externen API oder sonstige Umstände, die zu höherem Verbrauch oder zusätzlichen Kosten führen.
+
+Es liegt in der Verantwortung des Nutzers, die Konfiguration sorgfältig zu wählen, den Tokenverbrauch über die vorhandenen Readings zu beobachten und den eingesetzten Kontext auf das notwendige Maß zu begrenzen.
 
 ## Lizenz
 
