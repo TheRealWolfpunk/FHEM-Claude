@@ -1,0 +1,33 @@
+# Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
+# Do not insert empty lines here, update check depends on
+ - feature: 98_Claude.pm: chat-Befehl fuer allgemeine Fragen,
+                          Geraete-Status und Steuerung in einem;
+                          controlRoom ergaenzt controlList um
+                          raumbasierte Freigabe steuerbarer Geraete
+ - feature: 98_Claude.pm: neue Token-Readings promptTokenCount,
+                          candidatesTokenCount und totalTokenCount
+ - change:  98_Claude.pm: Logging und Doku fuer Claude-Fork an
+                          Upstream angeglichen und Claude-spezifisch
+                          angepasst
+ - feature: 98_Claude.pm: readingBlacklist mit Wildcard-Support fuer
+                          Device-/Control-Kontext und get_device_state;
+                          comment-Attribut wird in Device- und
+                          Control-Kontext uebernommen
+ - feature: 98_Claude.pm: Claude-Hybridbetrieb (Lokalmodus) mit
+                          localControlResolver: lokale Direktausfuehrung
+                          einfacher und eindeutiger Schaltbefehle ohne
+                          Tokenkosten; komplexe oder uneindeutige Faelle
+                          bleiben beim Claude-Fallback
+ - feature: 98_Claude.pm: Lokale Batch-Ausfuehrung fuer aufgeloeste
+                          Folgeanweisungen
+ - change:  98_Claude.pm: Token-Ersparnis durch Prompt-Caching und dynamische
+                          History
+ - bugfix:  98_Claude.pm: Stabilisierung von Tool-Sessions und Validierung
+                          leerer Requests
+ - feature: 98_Claude.pm: Optimierungen zum Sparen von Tokens
+ - feature: 98_Claude.pm: Reading responseSSML fuer Sprachausgabe ergänzt
+ - change:  98_Claude.pm: Tokenverbrauch fuer Hausautomation reduziert
+ - bugfix:  98_Claude.pm: Tool-Use/Tool-Result-Verarbeitung für Anthropic
+                          korrigiert
+ - change:  98_Claude.pm: Fork von 98_Gemini.pm; Umstellung von der
+                          Google Gemini API auf Anthropic Claude API
