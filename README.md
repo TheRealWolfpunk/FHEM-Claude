@@ -106,7 +106,7 @@ set ClaudeAI askAboutDevices Welche Geräte sind gerade eingeschaltet?
 Alternativ alle Geräte eines Raums automatisch einbeziehen:
 
 ```text
-attr ClaudeAI deviceRoom Wohnzimmer,Küche
+attr ClaudeAI deviceRoom Wohnzimmer,Kueche
 set ClaudeAI askAboutDevices Gib mir eine Zusammenfassung aller Geräte.
 ```
 
@@ -140,7 +140,7 @@ set ClaudeAI control Schalte alle Lampen im Wohnzimmer aus
 Alternativ können steuerbare Geräte auch raumbasiert freigegeben werden:
 
 ```text
-attr ClaudeAI controlRoom Wohnzimmer,Küche
+attr ClaudeAI controlRoom Wohnzimmer,Kueche
 set ClaudeAI control Schalte im Wohnzimmer das Licht aus
 ```
 
@@ -253,16 +253,16 @@ Bei `0` läuft jeder `control`-Befehl vollständig über Claude.
 ### Typische Fälle, die oft lokal funktionieren
 
 - Alias-Treffer auf genau ein Gerät  
-  z. B. `mach Stehlampe an`
+  z. B. `mach die Lavalampe an`
 - eindeutige Kombinationen aus Raum + Gerätetyp + einfachem Schaltkommando  
-  z. B. `mach die Lampen im Wohnzimmer an`
+  z. B. `schalte die Lampen im Wohnzimmer ein`
 - referenzielle Folgeanweisungen auf die letzte Zielmenge  
-  z. B. `mach sie wieder aus`
+  z. B. `du kannst sie wieder ausmachen`
 
 ### Typische Fälle, die weiterhin über Claude laufen
 
 - komplexe oder freie Semantik  
-  z. B. `mach es gemütlicher`
+  z. B. `mach es doch etwas gemütlicher`
 - nicht eindeutig auflösbare Sprache
 - komplexere Wert- oder Parameteranweisungen
 - Fälle, in denen zuerst Zustände geprüft oder interpretiert werden sollen

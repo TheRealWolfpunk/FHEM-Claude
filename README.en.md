@@ -8,6 +8,8 @@ FHEM module for integrating the Anthropic Claude AI API. Supports text queries, 
 
 This module is a fork of https://github.com/ahlers2mi/FHEM-Gemini.
 
+`98_Claude` has been specifically adapted for the German language. Therefore, the usage examples in this English README intentionally keep the original German example commands and phrases where that best reflects real-world usage.
+
 ### API Costs & Credits
 
 This module uses Anthropic's prepaid system. By default, the model **claude-haiku-4-5** is configured because it is currently the most cost-effective Claude model and usually offers a very suitable balance between capability and ongoing cost for typical home automation requests.
@@ -85,13 +87,13 @@ A current model overview is available here: https://platform.claude.com/docs/en/
 ### Ask a text question
 
 ```text
-set ClaudeAI ask What will the weather be like tomorrow in Berlin?
+set ClaudeAI ask Wie wird das Wetter morgen in Berlin?
 ```
 
 ### Analyze an image
 
 ```text
-set ClaudeAI askWithImage /opt/fhem/www/snapshot.jpg What can be seen in this image?
+set ClaudeAI askWithImage /opt/fhem/www/snapshot.jpg Was ist auf diesem Bild zu sehen?
 ```
 
 Supported image formats: `jpg`/`jpeg`, `png`, `gif`, `webp`.
@@ -99,31 +101,31 @@ Supported image formats: `jpg`/`jpeg`, `png`, `gif`, `webp`.
 ### Query device status
 
 ```text
-attr ClaudeAI deviceList Lamp1,Heating,Blind1
-set ClaudeAI askAboutDevices Which devices are currently turned on?
+attr ClaudeAI deviceList Lampe1,Heizung,Rolladen1
+set ClaudeAI askAboutDevices Welche Geräte sind gerade eingeschaltet?
 ```
 
 Alternatively, automatically include all devices in one or more rooms:
 
 ```text
-attr ClaudeAI deviceRoom Wohnzimmer,Küche
-set ClaudeAI askAboutDevices Give me a summary of all devices.
+attr ClaudeAI deviceRoom Wohnzimmer,Kueche
+set ClaudeAI askAboutDevices Gib mir eine Zusammenfassung aller Geräte.
 ```
 
 Using the wildcard `*` includes **all** devices defined in FHEM:
 
 ```text
 attr ClaudeAI deviceList *
-set ClaudeAI askAboutDevices Which devices are currently active?
+set ClaudeAI askAboutDevices Welche Geräte sind gerade aktiv?
 ```
 
 ### Control devices via voice command
 
 ```text
-attr ClaudeAI controlList Lamp1,Heating,Blind1
-set ClaudeAI control Turn on the living room lamp
-set ClaudeAI control Set the heating to 21 degrees
-set ClaudeAI control Lower all blinds
+attr ClaudeAI controlList Lampe1,Heizung,Rolladen1
+set ClaudeAI control Mach die Wohnzimmerlampe an
+set ClaudeAI control Stelle die Heizung auf 21 Grad
+set ClaudeAI control Fahre alle Rolläden runter
 ```
 
 Controllable devices are taken from `controlList` as well as all devices in the
@@ -134,14 +136,14 @@ to make all devices defined in FHEM controllable:
 
 ```text
 attr ClaudeAI controlList *
-set ClaudeAI control Turn off all lights in the living room
+set ClaudeAI control Schalte alle Lampen im Wohnzimmer aus
 ```
 
 Alternatively, controllable devices can be enabled by room:
 
 ```text
-attr ClaudeAI controlRoom Wohnzimmer,Küche
-set ClaudeAI control Turn off the light in the living room
+attr ClaudeAI controlRoom Wohnzimmer,Kueche
+set ClaudeAI control Schalte im Wohnzimmer das Licht aus
 ```
 
 ### Exclude specific readings and commands from the context
@@ -174,7 +176,7 @@ also included in the device and control context.
 Example:
 
 ```text
-attr LampeWohnzimmer ClaudeAI_Instructions The lamp is located to the left of the sofa and is the main lighting for the room.
+attr LampeWohnzimmer ClaudeAI_Instructions Die Lampe steht links neben dem Sofa und ist die Hauptbeleuchtung für den Raum.
 ```
 
 This allows you to provide Claude with additional semantic hints per device
@@ -186,9 +188,9 @@ without overloading the general device attributes.
 need to distinguish between `ask`, `askAboutDevices`, and `control`.
 
 ```text
-set ClaudeAI chat How warm is it in the living room?
-set ClaudeAI chat Please turn on the floor lamp
-set ClaudeAI chat What does the error message from my wallbox mean?
+set ClaudeAI chat Wie warm ist es im Wohnzimmer?
+set ClaudeAI chat Schalte bitte die Stehlampe ein
+set ClaudeAI chat Was bedeutet die Fehlermeldung meiner Wallbox?
 ```
 
 Behavior:
@@ -250,16 +252,16 @@ With `0`, every `control` command is handled completely through Claude.
 ### Typical cases that often work locally
 
 - alias match for exactly one device  
-  e.g. `turn on floor lamp`
+  z. B. `mach die Lavalampe an`
 - unambiguous combinations of room + device type + simple switching command  
-  e.g. `turn on the lights in the living room`
+  z. B. `schalte die Lampen im Wohnzimmer ein`
 - referential follow-up commands referring to the last target set  
-  e.g. `turn them off again`
+  z. B. `du kannst sie wieder ausmachen`
 
 ### Typical cases that still go through Claude
 
 - complex or free-form semantics  
-  e.g. `make it cozier`
+  z. B. `mach es doch etwas gemütlicher`
 - language that cannot be resolved unambiguously
 - more complex value or parameter instructions
 - cases where states first need to be checked or interpreted
