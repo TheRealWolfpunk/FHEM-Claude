@@ -1,3 +1,5 @@
+[Deutsch](README.md) | [English](README.en.md)
+
 # FHEM-Claude
 
 Version: 1.3.2
