@@ -4,6 +4,8 @@
 #
 #  FHEM smart home intelligence control/chat module for Anthropic Claude AI
 #
+#  https://github.com/TheRealWolfpunk/FHEM-Claude
+#
 ########################################################################################
 #
 #  This programm is free software; you can redistribute it and/or modify
@@ -28,7 +30,7 @@
 #                          evaluation of optional API fields; extended
 #                          token/cache readings can be shown or hidden
 #                          via attribute
-# 1.3.1 - 2026-04-17  New: instance-specific attribute <InstanceName>Instructions
+# 1.3.1 - 2026-04-17  New: instance-specific attribute <InstanceName>_Instructions
 #                          for device-specific Claude instructions in device
 #                          and control context; logging cleaned up
 # 1.3.0 - 2026-04-15  New: chat command for universal messages
@@ -219,7 +221,7 @@ sub Claude_Define {
         CommandAttr(undef, "$name localControlResolver 1");
     }
 
-    addToAttrList($hash->{NAME} . "Instructions:textField-long", "Claude");
+    addToAttrList($hash->{NAME} . "_Instructions:textField-long", "Claude");
 
     Log3 $name, 3, "Claude ($name): Defined";
     return undef;
@@ -238,6 +240,9 @@ sub Claude_Undefine {
 ##############################################################################
 sub Claude_Attr {
     my ($cmd, $name, $attr, $value) = @_;
+    if (($cmd eq 'set' || $cmd eq 'del') && $attr eq $name . '_Instructions') {
+        return "Attribute $attr is not supported on the Claude instance itself";
+    }
     if ($cmd eq 'set' && $attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
     }
@@ -1231,6 +1236,7 @@ sub Claude_BuildDeviceContext {
     if ($deviceRoom) {
         my @rooms = split(/\s*,\s*/, $deviceRoom);
         for my $devName (sort keys %main::defs) {
+            next if $devName eq $name;
             my $devRoomAttr = AttrVal($devName, 'room', '');
             for my $room (@rooms) {
                 if (grep { $_ eq $room } split(/\s*,\s*/, $devRoomAttr)) {
@@ -1248,6 +1254,7 @@ sub Claude_BuildDeviceContext {
     $devList = join(',', sort keys %main::defs) if $devList eq '*';
     if ($devList) {
         for my $devName (split(/\s*,\s*/, $devList)) {
+            next if $devName eq $name;
             unless ($seen{$devName}) {
                 push @devices, $devName;
                 $seen{$devName} = 1;
@@ -1304,7 +1311,7 @@ sub Claude_BuildDeviceContext {
 
             $context .= "  Klassen: " . join(', ', @classes) . "\n" if @classes;
 
-            my @attributes = ('room', 'group', 'alias', 'comment', $hash->{NAME} . 'Instructions', 'model', 'subType', 'genericDeviceType');
+            my @attributes = ('room', 'group', 'alias', 'comment', $hash->{NAME} . '_Instructions', 'model', 'subType', 'genericDeviceType');
             for my $attrName (@attributes) {
                 my $attrVal = AttrVal($devName, $attrName, '');
                 $context .= "  $attrName: $attrVal\n" if $attrVal;
@@ -1331,6 +1338,7 @@ sub Claude_GetControlDevices {
     if ($controlRoom) {
         my @rooms = split(/\s*,\s*/, $controlRoom);
         for my $devName (sort keys %main::defs) {
+            next if $devName eq $name;
             my $devRoomAttr = AttrVal($devName, 'room', '');
             for my $room (@rooms) {
                 if (grep { $_ eq $room } split(/\s*,\s*/, $devRoomAttr)) {
@@ -1349,6 +1357,7 @@ sub Claude_GetControlDevices {
     if ($controlList) {
         for my $devName (split(/\s*,\s*/, $controlList)) {
             next unless defined $devName && $devName ne '';
+            next if $devName eq $name;
             unless ($seen{$devName}) {
                 push @devices, $devName;
                 $seen{$devName} = 1;
@@ -1392,7 +1401,7 @@ sub Claude_BuildControlContext {
         my $capsStr = @capabilities ? join(', ', @capabilities) : 'generic';
 
         my $comment = AttrVal($devName, 'comment', '');
-        my $claudeInstructions = AttrVal($devName, $name . 'Instructions', '');
+        my $claudeInstructions = AttrVal($devName, $name . '_Instructions', '');
 
         if ($contextMode eq 'compact') {
             $context .= "  $alias (intern: $devName, Status: $state, Klassen: $capsStr)";
@@ -4400,12 +4409,12 @@ sub Claude_SendToolResults {
     Wildcards with * are supported, e.g. R-* or Wifi*.
     The blacklist is applied to device context, control context, and device state queries.</li><br>
 
-  <a id="Claude-attr-InstanznameInstructions"></a>
-  <li>&lt;InstanceName&gt;Instructions<br>
+  <a id="Claude-attr-.*_Instructions"></a>
+  <li>&lt;InstanceName&gt;_Instructions<br>
     Optional attribute on any FHEM device.<br>
     This allows storing device-specific instructions only for this Claude instance.
     The attribute is included in device and control context in addition to the general comment.<br>
-    Example: if the name in the define (InstanceName) of the Claude module is &quot;ClaudeAI&quot;, the additional attribute ClaudeAIInstructions appears on FHEM devices.</li>
+    Example: if the name in the define (InstanceName) of the Claude module is &quot;ClaudeAI&quot;, the additional attribute ClaudeAI_Instructions appears on FHEM devices.</li>
 </ul><br>
 
 =end html
@@ -4528,12 +4537,12 @@ sub Claude_SendToolResults {
     Wildcards mit * werden unterstützt, z. B. R-* oder Wifi*.
     Die Blacklist wird auf Device-Kontext, Control-Kontext und auf Gerätestatusabfragen angewendet.</li><br>
 
-  <a id="Claude-attr-InstanznameInstructions"></a>
-    <li>&lt;Instanzname&gt;Instructions<br>
+  <a id="Claude-attr-*._Instructions"></a>
+    <li>&lt;Instanzname&gt;_Instructions<br>
     Optionales Attribut an beliebigen FHEM-Geräten.<br>
     Damit lassen sich gerätespezifische Anweisungen nur für diese Claude-Instanz hinterlegen.
     Das Attribut wird zusätzlich zum allgemeinen comment in den Device- und Control-Kontext übernommen.<br>
-      Beispiel: Lautet der Name im define des Claude Moduls &quot;ClaudeAI&quot; (Instanzname), erscheint in FHEM-Geräten das Zusatzattribut ClaudeAIInstructions.</li>
+      Beispiel: Lautet der Name im define des Claude Moduls &quot;ClaudeAI&quot; (Instanzname), erscheint in FHEM-Geräten das Zusatzattribut ClaudeAI_Instructions.</li>
 </ul><br>
 
 =end html_DE

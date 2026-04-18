@@ -12,7 +12,7 @@ Dieses Modul nutzt das Prepaid-System von Anthropic. Standardmäßig ist das Mod
 
 Als grobe Orientierung für typische, eher kurze Statusabfragen oder einfache Schaltbefehle mit **claude-haiku-4-5** kann man häufig mit etwa **bis zu 3.000 Anfragen pro 5 $** rechnen. In sehr sparsamen Setups mit kleinem Kontext kann auch mehr möglich sein, bei größerem Gerätekontext, längeren Chat-Verläufen oder komplexeren Aufgaben aber auch deutlich weniger.
 
-Wichtig: Diese Angabe ist nur eine unverbindliche Grobabschätzung und keine Zusage. Der tatsächliche Verbrauch hängt unter anderem vom Umfang deiner FHEM-Geräteliste, vom gesendeten Kontext, von Chat-Historie, Zusatzinformationen wie `comment` oder `<Instanzname>Instructions`, vom verwendeten Modell sowie von der Komplexität der Anfragen ab.
+Wichtig: Diese Angabe ist nur eine unverbindliche Grobabschätzung und keine Zusage. Der tatsächliche Verbrauch hängt unter anderem vom Umfang deiner FHEM-Geräteliste, vom gesendeten Kontext, von Chat-Historie, Zusatzinformationen wie `comment` oder `<Instanzname>_Instructions`, vom verwendeten Modell sowie von der Komplexität der Anfragen ab.
 
 Wichtig für die Praxis: Wenn der `localControlResolver` aktiv ist, werden viele einfache und eindeutige Steuerbefehle direkt lokal in FHEM ausgeführt. Für diese Fälle ist kein zusätzlicher Claude-API-Aufruf nötig. Das spart im Alltag Tokens und damit laufende Kosten spürbar, sodass die reale Anzahl möglicher Befehle pro 5 $ in typischen Steuerungsszenarien oft eher besser ausfallen kann als bei rein API-basierter Nutzung.
 
@@ -83,7 +83,7 @@ Eine aktuelle Übersicht der Modelle gibt es hier: https://platform.claude.com/d
 ### Textfrage stellen
 
 ```text
-set ClaudeAI ask Wie ist das Wetter morgen in Berlin?
+set ClaudeAI ask Wie wird das Wetter morgen in Berlin?
 ```
 
 ### Bild analysieren
@@ -149,7 +149,7 @@ umfangreiche Readings bzw. Befehlsnamen gezielt aus dem an Claude gesendeten
 Kontext herausfiltern. Das hilft, den übertragenen Kontext kompakter zu halten.
 
 ```text
-attr ClaudeAI readingBlacklist R-* Wifi_* battery
+attr ClaudeAI readingBlacklist R-* Wifi* battery
 ```
 
 - die Liste ist leerzeichen-getrennt
@@ -166,7 +166,7 @@ Wenn bei FHEM-Geräten das Attribut `comment` gepflegt ist, wird dieses außerde
 zusätzlich als Beschreibung in den Device- und Control-Kontext übernommen.
 
 Zusätzlich kann pro Claude-Instanz ein instanzspezifisches Attribut wie
-`ClaudeAIInstructions` verwendet werden (bei einer Instanz mit dem Namen
+`ClaudeAI_Instructions` verwendet werden (bei einer Instanz mit dem Namen
 `ClaudeAI`). Dieses Attribut dient für gerätespezifische Anweisungen nur für
 diese Claude-Instanz und wird zusätzlich in den Device- und Control-Kontext
 übernommen.
@@ -174,7 +174,7 @@ diese Claude-Instanz und wird zusätzlich in den Device- und Control-Kontext
 Beispiel:
 
 ```text
-attr LampeWohnzimmer ClaudeAIInstructions Die Lampe steht links neben dem Sofa und ist die Hauptbeleuchtung für den Raum.
+attr LampeWohnzimmer ClaudeAI_Instructions Die Lampe steht links neben dem Sofa und ist die Hauptbeleuchtung für den Raum.
 ```
 
 Damit lassen sich Claude gezielt zusätzliche semantische Hinweise pro Gerät
@@ -299,7 +299,7 @@ get ClaudeAI chatHistory
 | `controlList` | Komma-getrennte Liste der Geräte, die Claude steuern darf; kann mit `controlRoom` kombiniert werden. `*` gibt alle FHEM-Geräte frei | – |
 | `controlRoom` | Komma-getrennte Raumliste; Geräte mit passendem `room`-Attribut werden automatisch zusätzlich als steuerbar eingestuft | – |
 | `localControlResolver` | Aktiviert den lokalen Resolver für den Claude-Hybridbetrieb (`0/1`); einfache und eindeutige `control`-Befehle werden direkt in FHEM ausgeführt, komplexere Fälle laufen weiter über Claude | `1` |
-| `<Instanzname>Instructions` | Instanzspezifisches Geräteattribut pro Claude-Instanz, z. B. `ClaudeAIInstructions`; ergänzt gerätespezifische Anweisungen für genau diese Claude-Instanz im Device- und Control-Kontext | – |
+| `<Instanzname>_Instructions` | Instanzspezifisches Geräteattribut pro Claude-Instanz, z. B. `ClaudeAI_Instructions`; ergänzt gerätespezifische Anweisungen für genau diese Claude-Instanz im Device- und Control-Kontext | – |
 | `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- oder Befehlsnamen, die nicht an Claude übermittelt werden; Wildcards wie `R-*` oder `Wifi_*` werden unterstützt; gilt für Device-/Control-Kontext und `get_device_state`; zusätzlich existiert eine interne Standard-Blacklist | – |
 | `showAdvancedTokenReadings` | Schaltet erweiterte Token-/Cache-Readings ein oder aus (`0/1`); Standard ist `0`, also ausgeblendet. Bei `1` werden zusätzliche technische Cache-/Token-Details als Readings sichtbar, bei `0` oder beim Löschen des Attributs werden diese zusätzlichen Readings wieder entfernt | `0` |
 
