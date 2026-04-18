@@ -1,5 +1,12 @@
 # Add changes at the top of the list. Keep it in ASCII, and 80-char wide.
 # Do not insert empty lines here, update check depends on
+ - feature: 98_Claude.pm: neue Readings fuer Request-/Response-Metadaten
+                          und optional einblendbare Advanced-Token-/Cache-
+                          Details; robustere Auswertung optionaler API-Felder
+ - feature: 98_Claude.pm: zusaetzliche Claude-Metadaten und robustere
+                          Auswertung optionaler API-Felder; erweiterte
+                          Token-/Cache-Readings per Attribut
+                          ein-/ausblendbar
  - feature: 98_Claude.pm: instanzspezifisches Attribut <Instanzname>Instructions
                           fuer geraetespezifische Claude-Anweisungen im
                           Device- und Control-Kontext

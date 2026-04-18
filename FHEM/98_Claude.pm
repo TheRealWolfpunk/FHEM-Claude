@@ -1,133 +1,84 @@
-##############################################################################
-# 98_Claude.pm
+########################################################################################
 #
-# FHEM Modul fuer Anthropic Claude AI
+#  98_Claude.pm
 #
-# Funktionen:
-#   - Text-Anfragen an Claude senden
-#   - Bilder (Base64 oder Dateipfad) senden
-#   - Chat-Verlauf (Multi-Turn) beibehalten
-#   - Chat zuruecksetzen
-#   - FHEM-Geraete per Tool Use steuern
+#  FHEM smart home intelligence control/chat module for Anthropic Claude AI
 #
-# Attribute:
-#   apiKey         - Anthropic API Key (Pflicht)
-#   model          - Claude Modell (Standard: claude-haiku-4-5)
-#   maxHistory     - Maximale Anzahl Chat-Nachrichten (Standard: 10);
-#                    weniger Verlauf haelt den mitgesendeten Kontext kleiner
-#   maxTokens      - Maximale Antwortlaenge; ohne gesetztes Attribut werden
-#                    je nach Anfrageart Fallback-Werte verwendet:
-#                    600 fuer ask/askAboutDevices, 300 fuer control/Tool Use.
-#                    Kleinere Werte begrenzen die Antwortlaenge und den
-#                    zu erwartenden Tokenverbrauch
-#   systemPrompt   - Optionaler System-Prompt; laengere Prompts erhoehen den
-#                    mitgesendeten Kontext pro Anfrage
-#   timeout        - HTTP Timeout in Sekunden (Standard: 30)
-#   promptCaching  - Prompt-Caching via Claude API aktivieren (0/1);
-#                    wiederkehrende Prompts und Kontexte koennen dadurch
-#                    effizienter verarbeitet werden
-#   deviceContextMode  - Kontext fuer askAboutDevices: compact oder detailed;
-#                        compact haelt den Kontext kleiner, detailed liefert
-#                        mehr Informationen
-#   controlContextMode - Kontext fuer control: compact oder detailed;
-#                        compact haelt den Kontext kleiner, detailed liefert
-#                        mehr Informationen
-#   deviceList     - Komma-getrennte Liste der Geraete fuer askAboutDevices
-#   deviceRoom     - Komma-getrennte Raumliste; Geraete mit passendem room-Attribut
-#                    werden automatisch fuer askAboutDevices verwendet
-#   controlList    - Komma-getrennte Liste der Geraete, die Claude steuern darf
-#   controlRoom    - Komma-getrennte Raumliste; Geraete mit passendem room-Attribut
-#                    werden automatisch als steuerbar eingestuft (ergaenzt controlList)
-#   localControlResolver - Aktiviert den lokalen Resolver fuer den
-#                    Claude-Hybridbetrieb (Lokalmodus) (0/1); einfache und
-#                    eindeutige control-Befehle werden direkt in FHEM
-#                    ausgefuehrt. Dafuer ist in diesen Faellen kein
-#                    zusaetzlicher Claude-API-Aufruf noetig, was im Alltag
-#                    Tokens und damit laufende Kosten sparen kann.
-#                    Komplexere Faelle laufen weiterhin ueber Claude
-#   readingBlacklist - Leerzeichen-getrennte Liste von Reading-/Befehlsnamen,
-#                      die nicht an Claude uebermittelt werden; Wildcards (*)
-#                      werden unterstuetzt
-#   disableHistory - Chat-Verlauf deaktivieren (0/1); jede Anfrage wird als eigenstaendiges Gespraech behandelt
+########################################################################################
 #
-# Set-Befehle:
-#   ask <Frage>                    - Textfrage stellen
-#   askWithImage <Pfad> <Frage>    - Bild + Frage senden
-#   askAboutDevices [<Frage>]      - Geraete-Statusabfrage
-#   chat <Nachricht>               - Universeller Befehl: allgemeine Fragen,
-#                                    Geraete-Status und Steuerung in einem
-#                                    (ideal fuer Telegram-Integration)
-#   control <Anweisung>            - Claude steuert Geraete via Tool Use
-#   resetChat                      - Chat-Verlauf loeschen
+#  This programm is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
 #
-# Lesewerte (Readings):
-#   response           - Letzte Antwort von Claude (Roh-Markdown)
-#   responsePlain      - Letzte Antwort, Markdown bereinigt (reiner Text)
-#   responseHTML       - Letzte Antwort, Markdown in HTML konvertiert
-#   responseSSML       - Letzte Antwort, fuer Sprachausgabe bereinigt (SSML)
-#   state              - Aktueller Status
-#   lastError          - Letzter Fehler
-#   chatHistory        - Anzahl der Nachrichten im Verlauf
-#   lastCommand        - Letzter ausgefuehrter set-Befehl
-#   lastCommandResult  - Ergebnis des letzten set-Befehls
-#   candidatesTokenCount - Anzahl der von Claude generierten Tokens (Antwort)
-#   promptTokenCount     - Anzahl der an Claude gesendeten Tokens (Input)
-#   totalTokenCount      - Gesamtsumme der verbrauchten Tokens (Input + Output)
+#  The GNU General Public License can be found at
+#  http://www.gnu.org/copyleft/gpl.html.
+#  A copy is found in the textfile GPL.txt and important notices to the license
+#  from the author is found in LICENSE.txt distributed with these scripts.
 #
-##############################################################################
+#  This script is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+########################################################################################
 
-# Versionshistorie:
-# 1.3.1 - 2026-04-17  Neu: instanzspezifisches Attribut <Instanzname>Instructions
-#                          fuer geraetespezifische Claude-Anweisungen im Device-
-#                          und Control-Kontext; Logging bereinigt
-# 1.3.0 - 2026-04-15  Neu: Befehl chat fuer universelle Nachrichten
-#                          (allgemeine Fragen, Geraete-Status und Steuerung
-#                          in einem Befehl, ideal fuer Telegram-Integration);
-#                          neues Attribut controlRoom analog zu deviceRoom fuer
-#                          steuerbare Geraete; neue Token-Readings
+# Version history:
+# 1.3.2 - 2026-04-17  New: additional Claude metadata and more robust
+#                          evaluation of optional API fields; extended
+#                          token/cache readings can be shown or hidden
+#                          via attribute
+# 1.3.1 - 2026-04-17  New: instance-specific attribute <InstanceName>Instructions
+#                          for device-specific Claude instructions in device
+#                          and control context; logging cleaned up
+# 1.3.0 - 2026-04-15  New: chat command for universal messages
+#                          (general questions, device status and control
+#                          in a single command, ideal for Telegram integration);
+#                          new controlRoom attribute analogous to deviceRoom for
+#                          controllable devices; new token readings
 #                          promptTokenCount, candidatesTokenCount,
 #                          totalTokenCount
-# 1.2.0 - 2026-04-13  Neu: readingBlacklist-Attribut mit Wildcard-Support
-#                          fuer Device-/Control-Kontext und get_device_state;
-#                          zusaetzlich wird das comment-Attribut von Geraeten
-#                          in Device- und Control-Kontext uebernommen
-# 1.1.0 - 2026-04-12  Neu: Claude-Hybridbetrieb (Lokalmodus) mit
-#                          localControlResolver; viele einfache und
-#                          eindeutige Steuerbefehle werden lokal direkt
-#                          in FHEM ausgefuehrt, komplexe oder
-#                          mehrdeutige Anweisungen laufen weiterhin
-#                          ueber Claude
-# 1.0.7 - 2026-04-12  Perf/Fix: Control-Prompts und ToolResult-Runden weiter
-#                          komprimiert; effektive Control-History dynamisch
-#                          begrenzt; Batch-Kontext bei mehrstufigem Tool-Use
-#                          wird erst nach Abschluss der Session finalisiert,
-#                          um Zielmengen-Fehler zu vermeiden
-# 1.0.6 - 2026-04-12  Fix: Folgeanweisungen mit Pronomen robuster gemacht;
-#                          letzte Steueraktion wird als Batch gemerkt und
-#                          Anweisungen werden lokal vor dem API-Call auf
-#                          die Zielmenge umgeschrieben und ausgefuehrt
-# 1.0.5 - 2026-04-12  Fix/Perf: Control-Requests gegen leere Messages und
-#                          Parameter abgesichert; Control-Antworten
-#                          standardmaessig verkuerzt; zusaetzliche Debug-Logs
-#                          fuer Referenzkontext und Tool-Use integriert
-# 1.0.4 - 2026-04-12  Perf: Tokenverbrauch weiter reduziert; kleinere Defaults fuer
-#                          maxHistory/maxTokens, optionales Prompt-Caching,
-#                          kompaktere Tool-Definitionen, sowie optionale
-#                          sparsame/ausfuehrliche Kontexte fuer askAboutDevices
-#                          und control
-# 1.0.3 - 2026-04-11  Neu: Reading responseSSML fuer Sprachausgabe ergaenzt
-# 1.0.2 - 2026-04-11  Perf: Tokenverbrauch fuer Hausautomation reduziert;
-#                          askAboutDevices-, control- und get_device_state-
-#                          Kontexte auf kompakte, aber praxistaugliche
-#                          Kerninformationen begrenzt
-# 1.0.1 - 2026-04-11  Fix: Tool-Use/Tool-Result-Verarbeitung fuer Anthropic
-#                          korrigiert; mehrere tool_use-Bloecke werden jetzt
-#                          gesammelt beantwortet und unvollstaendige historische
-#                          Tool-Turns vor API-Requests bereinigt
-# 1.0.0 - 2026-04-11  Neu: Forked from 98_Gemini.pm; Umstellung von Google Gemini API
-#                          auf Anthropic Claude API; Modulname, Doku, Endpunkte,
-#                          Request/Response-Handling und Function Calling auf
-#                          Claude Tool Use angepasst
+# 1.2.0 - 2026-04-13  New: readingBlacklist attribute with wildcard support
+#                          for device/control context and get_device_state;
+#                          additionally the comment attribute from devices
+#                          is included in device and control context
+# 1.1.0 - 2026-04-12  New: Claude hybrid operation (local mode) with
+#                          localControlResolver; many simple and
+#                          unambiguous control commands are executed
+#                          locally in FHEM, while complex or
+#                          ambiguous instructions still go
+#                          through Claude
+# 1.0.7 - 2026-04-12  Perf/Fix: control prompts and tool result rounds further
+#                          compacted; effective control history dynamically
+#                          limited; batch context for multi-step tool use
+#                          is only finalized after the session completes
+#                          to avoid target set errors
+# 1.0.6 - 2026-04-12  Fix: follow-up instructions with pronouns made more robust;
+#                          the last control action is remembered as a batch and
+#                          instructions are rewritten and executed locally for
+#                          the target set before the API call
+# 1.0.5 - 2026-04-12  Fix/Perf: control requests hardened against empty messages and
+#                          parameters; control responses shortened by default;
+#                          additional debug logs for reference context and
+#                          tool use integrated
+# 1.0.4 - 2026-04-12  Perf: token usage further reduced; smaller defaults for
+#                          maxHistory/maxTokens, optional prompt caching,
+#                          more compact tool definitions, plus optional
+#                          sparse/detailed contexts for askAboutDevices
+#                          and control
+# 1.0.3 - 2026-04-11  New: added responseSSML reading for speech output
+# 1.0.2 - 2026-04-11  Perf: token usage reduced for home automation;
+#                          askAboutDevices, control and get_device_state
+#                          contexts limited to compact but practical
+#                          core information
+# 1.0.1 - 2026-04-11  Fix: corrected tool use/tool result handling for Anthropic;
+#                          multiple tool_use blocks are now answered
+#                          collectively and incomplete historical
+#                          tool turns are cleaned up before API requests
+# 1.0.0 - 2026-04-11  New: forked from 98_Gemini.pm; migrated from Google Gemini API
+#                          to Anthropic Claude API; module name, docs, endpoints,
+#                          request/response handling and function calling adapted
+#                          to Claude Tool Use
 
 package main;
 
@@ -137,8 +88,11 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.3.1';
+my $MODULE_VERSION = '1.3.2';
 
+##############################################################################
+# Module initialization: register define/set/get/attr handlers and attr list
+##############################################################################
 sub Claude_Initialize {
     my ($hash) = @_;
 
@@ -153,12 +107,13 @@ sub Claude_Initialize {
         'maxHistory:5,10,20,50,100 ' .
         'maxTokens ' .
         'timeout ' .
-        'disable:0,1 ' .
-        'disableHistory:0,1 ' .
-        'promptCaching:0,1 ' .
+        'disable:1,0 ' .
+        'disableHistory:1,0 ' .
+        'promptCaching:1,0 ' .
+        'showAdvancedTokenReadings:1,0 ' .
         'deviceContextMode:compact,detailed ' .
         'controlContextMode:compact,detailed ' .
-        'localControlResolver:0,1 ' .
+        'localControlResolver:1,0 ' .
         'readingBlacklist:textField-long ' .
         'deviceList:textField-long ' .
         'controlList:textField-long ' .
@@ -176,11 +131,46 @@ sub Claude_Initialize {
     return undef;
 }
 
+
+##############################################################################
+# Helper function: check whether advanced token/cache readings are enabled
+##############################################################################
+sub Claude_HasAdvancedTokenReadingsEnabled {
+    my ($hash) = @_;
+    return 1 unless $hash && ref($hash) eq 'HASH';
+
+    my $name = $hash->{NAME};
+    return AttrVal($name, 'showAdvancedTokenReadings', 0) ? 1 : 0;
+}
+
+##############################################################################
+# Helper function: clear optional advanced token/cache readings
+##############################################################################
+sub Claude_ClearAdvancedTokenReadings {
+    my ($hash) = @_;
+    return unless $hash && ref($hash) eq 'HASH';
+
+    my $name = $hash->{NAME};
+    for my $reading (
+        'cacheCreationInputTokens',
+        'cacheReadInputTokens',
+        'cacheCreationEphemeral5mInputTokens',
+        'cacheCreationEphemeral1hInputTokens'
+    ) {
+        CommandDeleteReading(undef, "$name $reading");
+    }
+
+    return;
+}
+
+##############################################################################
+# Define function: initialize a Claude device instance and default readings
+##############################################################################
 sub Claude_Define {
     my ($hash, $def) = @_;
     my @args = split('[ \t]+', $def);
 
-    return "Usage: define <name> Claude" if (@args < 2);
+    return "Usage: define <name> Claude" if (@args != 2);
 
     my $name = $args[0];
     $hash->{NAME}        = $name;
@@ -196,9 +186,32 @@ sub Claude_Define {
     readingsSingleUpdate($hash, 'lastError',         '-',           0);
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
-    readingsSingleUpdate($hash, 'candidatesTokenCount', '-',        0);
-    readingsSingleUpdate($hash, 'promptTokenCount',     '-',        0);
-    readingsSingleUpdate($hash, 'totalTokenCount',      '-',        0);
+    readingsSingleUpdate($hash, 'candidatesTokenCount',      '-',   0);
+    readingsSingleUpdate($hash, 'promptTokenCount',          '-',   0);
+    readingsSingleUpdate($hash, 'totalTokenCount',           '-',   0);
+    if (Claude_HasAdvancedTokenReadingsEnabled($hash)) {
+        readingsSingleUpdate($hash, 'cacheCreationInputTokens',  '-',   0);
+        readingsSingleUpdate($hash, 'cacheReadInputTokens',      '-',   0);
+    }
+    readingsSingleUpdate($hash, 'stopReason',                '-',   0);
+    readingsSingleUpdate($hash, 'stopSequence',              '-',   0);
+    readingsSingleUpdate($hash, 'stopDetails',               '-',   0);
+    readingsSingleUpdate($hash, 'responseId',                '-',   0);
+    readingsSingleUpdate($hash, 'responseType',              '-',   0);
+    readingsSingleUpdate($hash, 'responseRole',              '-',   0);
+    readingsSingleUpdate($hash, 'serviceTier',               '-',   0);
+    readingsSingleUpdate($hash, 'inferenceGeo',              '-',   0);
+    if (Claude_HasAdvancedTokenReadingsEnabled($hash)) {
+        readingsSingleUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-', 0);
+        readingsSingleUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-', 0);
+    }
+    readingsSingleUpdate($hash, 'lastRequestModel',          '-',   0);
+    readingsSingleUpdate($hash, 'lastRequestType',           '-',   0);
+    readingsSingleUpdate($hash, 'lastRequestWasLocal',       '0',   0);
+    readingsSingleUpdate($hash, 'lastApiCallUsedTools',      '0',   0);
+    readingsSingleUpdate($hash, 'toolUseCount',              '0',   0);
+    readingsSingleUpdate($hash, 'toolSetDeviceCount',        '0',   0);
+    readingsSingleUpdate($hash, 'toolGetDeviceStateCount',   '0',   0);
     $hash->{LAST_CONTROLLED_DEVICES} = [];
     $hash->{LAST_CONTROL_BATCH}      = undef;
 
@@ -212,38 +225,66 @@ sub Claude_Define {
     return undef;
 }
 
+##############################################################################
+# Undefine function: clean up a Claude device instance
+##############################################################################
 sub Claude_Undefine {
     my ($hash, $name) = @_;
     return undef;
 }
 
+##############################################################################
+# Attribute function: validate attributes and manage derived readings
+##############################################################################
 sub Claude_Attr {
     my ($cmd, $name, $attr, $value) = @_;
-    if ($attr eq 'timeout') {
+    if ($cmd eq 'set' && $attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
     }
-    if ($attr eq 'maxTokens') {
+    if ($cmd eq 'set' && $attr eq 'maxTokens') {
         return "maxTokens must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
+    }
+    if ($attr eq 'showAdvancedTokenReadings') {
+        my $hash = $defs{$name};
+        return undef unless $hash && ref($hash) eq 'HASH';
+
+        if ($cmd eq 'set') {
+            if ($value) {
+                readingsBeginUpdate($hash);
+                readingsBulkUpdate($hash, 'cacheCreationInputTokens', '-');
+                readingsBulkUpdate($hash, 'cacheReadInputTokens', '-');
+                readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-');
+                readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-');
+                readingsEndUpdate($hash, 1);
+            } else {
+                Claude_ClearAdvancedTokenReadings($hash);
+            }
+        } elsif ($cmd eq 'del') {
+            Claude_ClearAdvancedTokenReadings($hash);
+        }
     }
     return undef;
 }
 
+##############################################################################
+# Set function: dispatch user commands such as ask/chat/control/resetChat
+##############################################################################
 sub Claude_Set {
     my ($hash, $name, $cmd, @args) = @_;
 
     return "\"set $name\" needs at least one argument" unless defined($cmd);
 
     if ($cmd eq 'ask') {
-        return "Usage: set $name ask <Frage>" unless @args;
+        return "Usage: set $name ask <question>" unless @args;
         my $question = join(' ', @args);
         Claude_SendRequest($hash, $question, undef, undef);
         return undef;
 
     } elsif ($cmd eq 'askWithImage') {
-        return "Usage: set $name askWithImage <Bildpfad> <Frage>" unless @args >= 2;
+        return "Usage: set $name askWithImage <imagePath> <question>" unless @args >= 2;
         my $imagePath = $args[0];
         my $question  = join(' ', @args[1..$#args]);
-        return "Bilddatei nicht gefunden: $imagePath" unless -f $imagePath;
+        return "Image file not found: $imagePath" unless -f $imagePath;
         Claude_SendRequest($hash, $question, $imagePath, undef);
         return undef;
 
@@ -254,7 +295,7 @@ sub Claude_Set {
         return undef;
 
     } elsif ($cmd eq 'chat') {
-        return "Usage: set $name chat <Nachricht>" unless @args;
+        return "Usage: set $name chat <message>" unless @args;
         my $message = join(' ', @args);
         my @controlDevices = Claude_GetControlDevices($hash);
         my $deviceContext = Claude_BuildDeviceContext($hash);
@@ -266,9 +307,9 @@ sub Claude_Set {
         return undef;
 
     } elsif ($cmd eq 'control') {
-        return "Usage: set $name control <Anweisung>" unless @args;
+        return "Usage: set $name control <instruction>" unless @args;
         my @controlDevices = Claude_GetControlDevices($hash);
-        return "Fehler: Weder controlList noch controlRoom ist gesetzt" unless @controlDevices;
+        return "Error: neither controlList nor controlRoom is set" unless @controlDevices;
         my $instruction = join(' ', @args);
         Claude_SendControl($hash, $instruction, undef);
         return undef;
@@ -277,9 +318,14 @@ sub Claude_Set {
         $hash->{CHAT} = [];
         $hash->{LAST_CONTROLLED_DEVICES} = [];
         $hash->{LAST_CONTROL_BATCH}      = undef;
+        delete $hash->{LAST_CONTROL_INSTRUCTION};
+        delete $hash->{CONTROL_START_IDX};
+        delete $hash->{CONTROL_SUCCESSFUL_DEVICES};
+        delete $hash->{CONTROL_SUCCESSFUL_COMMANDS};
+        delete $hash->{CHAT_EXTRA_CONTEXT};
         readingsSingleUpdate($hash, 'chatHistory', 0, 1);
         readingsSingleUpdate($hash, 'state', 'chat reset', 1);
-        Log3 $name, 3, "Claude ($name): Chat-Verlauf zurueckgesetzt";
+        Log3 $name, 3, "Claude ($name): Chat history reset";
         return undef;
 
     } else {
@@ -287,12 +333,15 @@ sub Claude_Set {
     }
 }
 
+##############################################################################
+# Get function: return module information such as chat history
+##############################################################################
 sub Claude_Get {
     my ($hash, $name, $cmd, @args) = @_;
 
     if ($cmd eq 'chatHistory') {
         my $history = $hash->{CHAT};
-        my $output  = "Chat-Verlauf (" . scalar(@$history) . " Eintraege):\n";
+        my $output  = "Chat-Verlauf (" . scalar(@$history) . " entries):\n";
         $output    .= "-" x 60 . "\n";
 
         for my $i (0..$#$history) {
@@ -308,7 +357,7 @@ sub Claude_Get {
 }
 
 ##############################################################################
-# Hilfsfunktion: Nachricht fuer Anzeige aufbereiten
+# Helper function: prepare message for display
 ##############################################################################
 sub Claude_MessageToDisplayText {
     my ($msg) = @_;
@@ -329,7 +378,7 @@ sub Claude_MessageToDisplayText {
         if (($part->{type} // '') eq 'text') {
             push @partsText, $part->{text} if exists $part->{text};
         } elsif (($part->{type} // '') eq 'image') {
-            push @partsText, '[Bild]';
+            push @partsText, '[Image]';
         } elsif (($part->{type} // '') eq 'tool_use') {
             my $toolName = $part->{name} // 'tool';
             push @partsText, "[ToolUse:$toolName]";
@@ -342,7 +391,55 @@ sub Claude_MessageToDisplayText {
 }
 
 ##############################################################################
-# Hilfsfunktion: Chat-Verlauf begrenzen
+# Helper function: limit chat history
+##############################################################################
+sub Claude_MessageHasToolUse {
+    my ($msg) = @_;
+    return 0 unless $msg && ref($msg) eq 'HASH';
+    return 0 unless ref($msg->{content}) eq 'ARRAY';
+
+    for my $part (@{$msg->{content}}) {
+        next unless ref($part) eq 'HASH';
+        return 1 if (($part->{type} // '') eq 'tool_use');
+    }
+
+    return 0;
+}
+
+##############################################################################
+# Helper function: detect whether a message contains tool results
+##############################################################################
+sub Claude_MessageHasToolResult {
+    my ($msg) = @_;
+    return 0 unless $msg && ref($msg) eq 'HASH';
+    return 0 unless ref($msg->{content}) eq 'ARRAY';
+
+    for my $part (@{$msg->{content}}) {
+        next unless ref($part) eq 'HASH';
+        return 1 if (($part->{type} // '') eq 'tool_result');
+    }
+
+    return 0;
+}
+
+##############################################################################
+# Helper function: preserve complete tool-use turns while trimming history
+##############################################################################
+sub Claude_MessageIsToolTurnStart {
+    my ($msg) = @_;
+    return Claude_MessageHasToolUse($msg) ? 1 : 0;
+}
+
+##############################################################################
+# Helper function: detect whether a message starts a tool-result turn
+##############################################################################
+sub Claude_MessageIsToolTurnResult {
+    my ($msg) = @_;
+    return Claude_MessageHasToolResult($msg) ? 1 : 0;
+}
+
+##############################################################################
+# Helper function: preserve complete tool-use turns while trimming history
 ##############################################################################
 sub Claude_TrimHistory {
     my ($hash, $maxHistory) = @_;
@@ -352,20 +449,87 @@ sub Claude_TrimHistory {
     $maxHistory = int($maxHistory // 0);
     $maxHistory = 1 if $maxHistory < 1;
 
-    # Verlauf hart auf die konfigurierte Anzahl Eintraege begrenzen
-    while (scalar(@{$hash->{CHAT}}) > $maxHistory) {
-        shift @{$hash->{CHAT}};
+    my $chat = $hash->{CHAT};
+    return unless @$chat;
+
+    my @segments;
+    my $idx = 0;
+
+    while ($idx <= $#$chat) {
+        my $msg = $chat->[$idx];
+
+        if (!defined $msg || ref($msg) ne 'HASH') {
+            push @segments, [ $idx, $idx ];
+            $idx++;
+            next;
+        }
+
+        if (
+            Claude_MessageIsToolTurnStart($msg) &&
+            $idx + 1 <= $#$chat &&
+            defined $chat->[$idx + 1] &&
+            ref($chat->[$idx + 1]) eq 'HASH' &&
+            Claude_MessageIsToolTurnResult($chat->[$idx + 1])
+        ) {
+            push @segments, [ $idx, $idx + 1 ];
+            $idx += 2;
+            next;
+        }
+
+        push @segments, [ $idx, $idx ];
+        $idx++;
     }
 
-    # Claude-Konversationen muessen sinnvoll mit einer User-Nachricht beginnen.
-    # Fuehrende Assistant-Nachrichten werden deshalb abgeschnitten.
-    while (@{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user') {
-        shift @{$hash->{CHAT}};
+    if (@segments > $maxHistory) {
+        my $keepStartSegmentIdx = @segments - $maxHistory;
+        my $keepFrom = $segments[$keepStartSegmentIdx][0];
+        splice(@$chat, 0, $keepFrom) if $keepFrom > 0;
     }
+
+    while (@$chat) {
+        my $first = $chat->[0];
+
+        if (!defined $first || ref($first) ne 'HASH') {
+            shift @$chat;
+            next;
+        }
+
+        last if ($first->{role} // '') eq 'user';
+
+        if (
+            @$chat >= 2 &&
+            Claude_MessageIsToolTurnStart($chat->[0]) &&
+            defined $chat->[1] &&
+            ref($chat->[1]) eq 'HASH' &&
+            Claude_MessageIsToolTurnResult($chat->[1])
+        ) {
+            splice(@$chat, 0, 2);
+        } else {
+            shift @$chat;
+        }
+    }
+
+    while (@$chat && Claude_MessageIsToolTurnResult($chat->[0])) {
+        shift @$chat;
+    }
+
+    while (@$chat) {
+        my $last = $chat->[-1];
+        last unless defined $last && ref($last) eq 'HASH';
+
+        if (Claude_MessageIsToolTurnStart($last)) {
+            pop @$chat;
+            next;
+        }
+
+        last;
+    }
+
+    return;
 }
 
 ##############################################################################
-# Hilfsfunktion: Claude API Request Header
+# Helper function: Claude API request header
 ##############################################################################
 sub Claude_RequestHeaders {
     my ($apiKey) = @_;
@@ -374,24 +538,132 @@ sub Claude_RequestHeaders {
         "Content-Type: application/json\r\n" .
         "Accept: application/json\r\n" .
         "anthropic-version: 2023-06-01\r\n" .
+        "anthropic-beta: prompt-caching-2024-07-31\r\n" .
         "x-api-key: $apiKey";
 }
 
 ##############################################################################
-# Hilfsfunktion: URL fuer Claude Messages API
+# Helper function: URL for the Claude Messages API
 ##############################################################################
 sub Claude_ApiUrl {
     return 'https://api.anthropic.com/v1/messages';
 }
 
 ##############################################################################
-# Hauptfunktion: Anfrage an Claude API senden
+# Helper function: check whether prompt caching is enabled
+##############################################################################
+sub Claude_HasPromptCachingEnabled {
+    my ($hash) = @_;
+    return 0 unless $hash && ref($hash) eq 'HASH';
+
+    my $name = $hash->{NAME};
+    return AttrVal($name, 'promptCaching', 0) ? 1 : 0;
+}
+
+##############################################################################
+# Helper function: return prompt caching configuration for Anthropic requests
+##############################################################################
+sub Claude_GetPromptCacheControl {
+    my ($hash) = @_;
+    return undef unless Claude_HasPromptCachingEnabled($hash);
+
+    return { type => 'ephemeral' };
+}
+
+##############################################################################
+# Helper function: normalize a system prompt/string into Claude content blocks
+##############################################################################
+sub Claude_BuildSystemBlocks {
+    my ($systemText, %opts) = @_;
+
+    return undef unless defined $systemText && $systemText ne '';
+
+    my $cacheControl = $opts{cache_control};
+    my %block = (
+        type => 'text',
+        text => $systemText,
+    );
+
+    $block{cache_control} = $cacheControl if $cacheControl && ref($cacheControl) eq 'HASH';
+    return [ \%block ];
+}
+
+##############################################################################
+# Helper function: update metadata/token readings from Claude responses
+##############################################################################
+sub Claude_UpdateResponseMetadataReadings {
+    my ($hash, $result, %opts) = @_;
+    return unless $hash && ref($hash) eq 'HASH';
+
+    $result ||= {};
+    my $usage = (ref($result->{usage}) eq 'HASH') ? $result->{usage} : {};
+
+    my $inputTokens         = $usage->{input_tokens};
+    my $outputTokens        = $usage->{output_tokens};
+    my $cacheCreationTokens = $usage->{cache_creation_input_tokens};
+    my $cacheReadTokens     = $usage->{cache_read_input_tokens};
+    my $cacheCreation       = (ref($usage->{cache_creation}) eq 'HASH') ? $usage->{cache_creation} : {};
+    my $cache5mTokens       = $cacheCreation->{ephemeral_5m_input_tokens};
+    my $cache1hTokens       = $cacheCreation->{ephemeral_1h_input_tokens};
+    my $stopDetails         = $result->{stop_details};
+    my $stopDetailsString   = defined $stopDetails ? eval { encode_json($stopDetails) } : undef;
+    $stopDetailsString      = defined $stopDetails ? "$stopDetails" : undef if defined $stopDetails && !defined $stopDetailsString;
+
+    my $hasAnyTokenCount = (defined $inputTokens || defined $outputTokens || defined $cacheCreationTokens) ? 1 : 0;
+    my $totalTokens = 0;
+    $totalTokens += $inputTokens         if defined $inputTokens;
+    $totalTokens += $outputTokens        if defined $outputTokens;
+    $totalTokens += $cacheCreationTokens if defined $cacheCreationTokens;
+
+    my $lastRequestType  = defined $opts{request_type}     ? $opts{request_type}     : '-';
+    my $lastRequestModel = defined $opts{request_model}    ? $opts{request_model}    : ($result->{model} // '-');
+    my $lastWasLocal     = defined $opts{was_local}        ? $opts{was_local}        : 0;
+    my $usedTools        = defined $opts{used_tools}       ? $opts{used_tools}       : 0;
+    my $toolUseCount     = defined $opts{tool_use_count}   ? $opts{tool_use_count}   : 0;
+    my $toolSetCount     = defined $opts{tool_set_count}   ? $opts{tool_set_count}   : 0;
+    my $toolGetStateCount= defined $opts{tool_get_count}   ? $opts{tool_get_count}   : 0;
+    my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
+
+    readingsBeginUpdate($hash);
+    readingsBulkUpdate($hash, 'promptTokenCount',         defined $inputTokens         ? $inputTokens         : '-');
+    readingsBulkUpdate($hash, 'candidatesTokenCount',     defined $outputTokens        ? $outputTokens        : '-');
+    readingsBulkUpdate($hash, 'totalTokenCount',          $hasAnyTokenCount ? $totalTokens : '-');
+    if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'cacheCreationInputTokens', defined $cacheCreationTokens ? $cacheCreationTokens : '-');
+        readingsBulkUpdate($hash, 'cacheReadInputTokens',     defined $cacheReadTokens     ? $cacheReadTokens     : '-');
+    }
+    readingsBulkUpdate($hash, 'stopReason',               defined $result->{stop_reason}   ? $result->{stop_reason}   : '-');
+    readingsBulkUpdate($hash, 'stopSequence',             defined $result->{stop_sequence} ? $result->{stop_sequence} : '-');
+    readingsBulkUpdate($hash, 'stopDetails',              defined $stopDetailsString       ? $stopDetailsString       : '-');
+    readingsBulkUpdate($hash, 'responseId',               defined $result->{id}            ? $result->{id}            : '-');
+    readingsBulkUpdate($hash, 'responseType',             defined $result->{type}          ? $result->{type}          : '-');
+    readingsBulkUpdate($hash, 'responseRole',             defined $result->{role}          ? $result->{role}          : '-');
+    readingsBulkUpdate($hash, 'serviceTier',              defined $usage->{service_tier}   ? $usage->{service_tier}   : '-');
+    readingsBulkUpdate($hash, 'inferenceGeo',             defined $usage->{inference_geo}  ? $usage->{inference_geo}  : '-');
+    if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', defined $cache5mTokens ? $cache5mTokens : '-');
+        readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', defined $cache1hTokens ? $cache1hTokens : '-');
+    }
+    readingsBulkUpdate($hash, 'lastRequestModel',         defined $lastRequestModel        ? $lastRequestModel        : '-');
+    readingsBulkUpdate($hash, 'lastRequestType',          defined $lastRequestType         ? $lastRequestType         : '-');
+    readingsBulkUpdate($hash, 'lastRequestWasLocal',      $lastWasLocal ? '1' : '0');
+    readingsBulkUpdate($hash, 'lastApiCallUsedTools',     $usedTools ? '1' : '0');
+    readingsBulkUpdate($hash, 'toolUseCount',             $toolUseCount);
+    readingsBulkUpdate($hash, 'toolSetDeviceCount',       $toolSetCount);
+    readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  $toolGetStateCount);
+    readingsEndUpdate($hash, 1);
+
+    return;
+}
+
+##############################################################################
+# Main function: send request to the Claude API
 ##############################################################################
 sub Claude_SendRequest {
     my ($hash, $question, $imagePath, $deviceContext) = @_;
     my $name = $hash->{NAME};
 
-    # Modul deaktiviert? Dann keine Anfrage ausfuehren
+    # Module disabled? Then do not execute a request
     if (AttrVal($name, 'disable', 0)) {
         readingsSingleUpdate($hash, 'state', 'disabled', 1);
         return;
@@ -399,9 +671,9 @@ sub Claude_SendRequest {
 
     my $apiKey = AttrVal($name, 'apiKey', '');
     if (!$apiKey) {
-        readingsSingleUpdate($hash, 'lastError', 'Kein API Key gesetzt (attr apiKey)', 1);
+        readingsSingleUpdate($hash, 'lastError', 'No API key set (attr apiKey)', 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): Kein API Key konfiguriert!";
+        Log3 $name, 1, "Claude ($name): No API key configured!";
         return;
     }
 
@@ -409,22 +681,33 @@ sub Claude_SendRequest {
     my $timeout    = AttrVal($name, 'timeout',    30);
     my $maxHistory = int(AttrVal($name, 'maxHistory', 10));
     my $maxTokens  = int(AttrVal($name, 'maxTokens',  600));
+    my $cacheControl = Claude_GetPromptCacheControl($hash);
 
-    Log3 $name, 4, "Claude ($name): Verwende Modell $model";
+    readingsBeginUpdate($hash);
+    readingsBulkUpdate($hash, 'lastRequestType',      $imagePath ? 'askWithImage' : ($deviceContext ? 'askAboutDevices' : 'ask'));
+    readingsBulkUpdate($hash, 'lastRequestModel',     $model);
+    readingsBulkUpdate($hash, 'lastRequestWasLocal',  '0');
+    readingsBulkUpdate($hash, 'lastApiCallUsedTools', '0');
+    readingsBulkUpdate($hash, 'toolUseCount',         '0');
+    readingsBulkUpdate($hash, 'toolSetDeviceCount',   '0');
+    readingsBulkUpdate($hash, 'toolGetDeviceStateCount', '0');
+    readingsEndUpdate($hash, 1);
 
-    # Claude erwartet Inhalte als content-Array mit Text- und optionalen Bild-Bloecken
+    Log3 $name, 4, "Claude ($name): Using model $model";
+
+    # Claude expects content as a content array with text and optional image blocks
     my @content;
 
     if ($imagePath) {
         my $mimeType = Claude_GetMimeType($imagePath);
         if (!$mimeType) {
-            readingsSingleUpdate($hash, 'lastError', "Nicht unterstuetztes Bildformat: $imagePath (erlaubt: jpg, jpeg, png, gif, webp)", 1);
+            readingsSingleUpdate($hash, 'lastError', "Unsupported image format: $imagePath (allowed: jpg, jpeg, png, gif, webp)", 1);
             readingsSingleUpdate($hash, 'state', 'error', 1);
-            Log3 $name, 2, "Claude ($name): Nicht unterstuetztes Bildformat: $imagePath";
+            Log3 $name, 2, "Claude ($name): Unsupported image format: $imagePath";
             return;
         }
         open(my $fh, '<', $imagePath) or do {
-            readingsSingleUpdate($hash, 'lastError', "Kann Bild nicht lesen: $imagePath", 1);
+            readingsSingleUpdate($hash, 'lastError', "Cannot read image: $imagePath", 1);
             readingsSingleUpdate($hash, 'state', 'error', 1);
             return;
         };
@@ -442,7 +725,7 @@ sub Claude_SendRequest {
                 data       => $base64Image
             }
         };
-        Log3 $name, 4, "Claude ($name): Bild geladen: $imagePath ($mimeType)";
+        Log3 $name, 4, "Claude ($name): Image loaded: $imagePath ($mimeType)";
     }
 
     push @content, {
@@ -450,50 +733,52 @@ sub Claude_SendRequest {
         text => $question
     };
 
-    # Benutzer-Nachricht in den lokalen Verlauf uebernehmen
+    # Add user message to local history
     push @{$hash->{CHAT}}, {
         role    => 'user',
         content => \@content
     };
 
-    # Verlauf auf maximale Laenge begrenzen und sicherstellen,
-    # dass kein ungueltiger Assistant-Turn am Anfang steht
+    # Limit history to the maximum length and ensure
+    # that there is no invalid assistant turn at the beginning
     Claude_TrimHistory($hash, $maxHistory);
 
-    # Optional kann der Verlauf fuer API-Requests deaktiviert werden.
-    # Dann wird nur die letzte Nachricht an Claude geschickt.
+    # Optionally, history can be disabled for API requests.
+    # In that case only the last message is sent to Claude.
     my $disableHistory = AttrVal($name, 'disableHistory', 0);
-    my $messagesToSend = $disableHistory ? [ $hash->{CHAT}[-1] ] : $hash->{CHAT};
+    my $messagesToSend = $disableHistory
+        ? [ $hash->{CHAT}[-1] ]
+        : Claude_SanitizeMessagesForApi($hash->{CHAT}, $name);
 
-    # systemPrompt und optionaler deviceContext werden zu einem
-    # gemeinsamen System-Text fuer Claude zusammengebaut
+    # systemPrompt and optional deviceContext are combined into
+    # a single system text for Claude
     my $systemPrompt = AttrVal($name, 'systemPrompt', '');
     my $fullSystem   = '';
     $fullSystem .= $systemPrompt  if $systemPrompt;
     $fullSystem .= "\n\n"         if $systemPrompt && $deviceContext;
     $fullSystem .= $deviceContext if $deviceContext;
+    my $systemBlocks = Claude_BuildSystemBlocks($fullSystem, cache_control => $cacheControl);
 
-    # Aufbau des Claude-Messages-Requests.
-    # Anders als bei Gemini liegen System-Prompt und Nachrichten
-    # in getrennten Feldern.
+    # Build the Claude messages request.
+    # Unlike Gemini, the system prompt and messages
+    # are in separate fields.
     my %requestBody = (
         model      => $model,
         max_tokens => $maxTokens,
         messages   => $messagesToSend
     );
 
-    $requestBody{system} = $fullSystem if $fullSystem ne '';
-    $requestBody{cache_control} = { type => 'ephemeral' } if AttrVal($name, 'promptCaching', 0);
+    $requestBody{system} = $systemBlocks if $systemBlocks;
 
     my $jsonBody = eval { encode_json(\%requestBody) };
     if ($@) {
-        readingsSingleUpdate($hash, 'lastError', "JSON Encode Fehler: $@", 1);
+        readingsSingleUpdate($hash, 'lastError', "JSON encode error: $@", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
         pop @{$hash->{CHAT}};
         return;
     }
 
-    Log3 $name, 4, "Claude ($name): Anfrage " . $jsonBody;
+    Log3 $name, 4, "Claude ($name): Request " . $jsonBody;
 
     readingsSingleUpdate($hash, 'state', 'requesting...', 1);
 
@@ -511,7 +796,7 @@ sub Claude_SendRequest {
 }
 
 ##############################################################################
-# Callback: Antwort von Claude verarbeiten
+# Callback: process response from Claude
 ##############################################################################
 sub Claude_HandleResponse {
     my ($param, $err, $data) = @_;
@@ -519,50 +804,51 @@ sub Claude_HandleResponse {
     my $name = $hash->{NAME};
 
     if ($err) {
-        readingsSingleUpdate($hash, 'lastError', "HTTP Fehler: $err", 1);
+        readingsSingleUpdate($hash, 'lastError', "HTTP error: $err", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): HTTP Fehler: $err";
+        Log3 $name, 1, "Claude ($name): HTTP error: $err";
         pop @{$hash->{CHAT}};
         return;
     }
 
-    utf8::downgrade($data, 1);
-
-    Log3 $name, 5, "Claude ($name): Antwort raw: $data";
+    Log3 $name, 5, "Claude ($name): Raw response: $data";
 
     my $result = eval { decode_json($data) };
     if ($@) {
-        readingsSingleUpdate($hash, 'lastError', "JSON Parse Fehler: $@", 1);
+        readingsSingleUpdate($hash, 'lastError', "JSON parse error: $@", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): JSON Parse Fehler: $@";
+        Log3 $name, 1, "Claude ($name): JSON parse error: $@";
         pop @{$hash->{CHAT}};
         return;
     }
 
-    if (exists $result->{usage}) {
-        my $inputTokens  = $result->{usage}{input_tokens};
-        my $outputTokens = $result->{usage}{output_tokens};
-        my $totalTokens  = (defined $inputTokens ? $inputTokens : 0) + (defined $outputTokens ? $outputTokens : 0);
-        readingsSingleUpdate($hash, 'promptTokenCount',     defined $inputTokens  ? $inputTokens  : '-', 1);
-        readingsSingleUpdate($hash, 'candidatesTokenCount', defined $outputTokens ? $outputTokens : '-', 1);
-        readingsSingleUpdate($hash, 'totalTokenCount',      $totalTokens, 1);
-    }
+    Claude_UpdateResponseMetadataReadings(
+        $hash,
+        $result,
+        request_type  => ReadingsVal($name, 'lastRequestType', 'ask'),
+        request_model => ReadingsVal($name, 'lastRequestModel', AttrVal($name, 'model', 'claude-haiku-4-5')),
+        was_local     => 0,
+        used_tools    => 0,
+        tool_use_count => 0,
+        tool_set_count => 0,
+        tool_get_count => 0
+    );
 
     if (exists $result->{model}) {
-        Log3 $name, 4, "Claude ($name): API meldet Modell " . $result->{model};
+        Log3 $name, 4, "Claude ($name): API reports model " . $result->{model};
     }
 
     if (exists $result->{error}) {
         my $errType = $result->{error}{type}    // 'unknown_error';
-        my $errMsg  = $result->{error}{message} // 'Unbekannter API Fehler';
-        readingsSingleUpdate($hash, 'lastError', "API Fehler ($errType): $errMsg", 1);
+        my $errMsg  = $result->{error}{message} // 'Unknown API error';
+        readingsSingleUpdate($hash, 'lastError', "API error ($errType): $errMsg", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): API Fehler ($errType): $errMsg";
+        Log3 $name, 1, "Claude ($name): API error ($errType): $errMsg";
         pop @{$hash->{CHAT}};
         return;
     }
 
-    # Claude liefert die eigentliche Antwort als Liste von content-Bloecken
+    # Claude returns the actual response as a list of content blocks
     my $contentBlocks = $result->{content} // [];
     my $responseUnicode = '';
     my %contentTypes;
@@ -575,8 +861,17 @@ sub Claude_HandleResponse {
 
     if (!$responseUnicode) {
         my $stopReason = $result->{stop_reason} // 'UNKNOWN';
+        if ($stopReason eq 'tool_use') {
+            my $errMsg = "Unexpected tool_use stop in non-control request";
+            readingsSingleUpdate($hash, 'lastError', $errMsg, 1);
+            readingsSingleUpdate($hash, 'state', 'error', 1);
+            Log3 $name, 2, "Claude ($name): $errMsg";
+            pop @{$hash->{CHAT}};
+            return;
+        }
+
         my $types = %contentTypes ? join(', ', sort keys %contentTypes) : 'none';
-        my $errMsg = "Claude-Antwort enthielt keinen Textblock (stop_reason: $stopReason, content types: $types)";
+        my $errMsg = "Claude response contained no text block (stop_reason: $stopReason, content types: $types)";
         readingsSingleUpdate($hash, 'lastError', $errMsg, 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
         Log3 $name, 2, "Claude ($name): $errMsg";
@@ -584,7 +879,7 @@ sub Claude_HandleResponse {
         return;
     }
 
-    # Assistant-Antwort vollstaendig fuer Multi-Turn-Gespraeche speichern
+    # Store the assistant response in full for multi-turn conversations
     push @{$hash->{CHAT}}, {
         role    => 'assistant',
         content => $contentBlocks
@@ -612,12 +907,12 @@ sub Claude_HandleResponse {
     readingsBulkUpdate($hash, 'lastError',     '-');
     readingsEndUpdate($hash, 1);
 
-    Log3 $name, 4, "Claude ($name): Antwort erhalten (" . length($responseUnicode) . " Zeichen)";
+    Log3 $name, 4, "Claude ($name): Response received (" . length($responseUnicode) . " characters)";
     return undef;
 }
 
 ##############################################################################
-# Hilfsfunktion: Markdown in reinen Text konvertieren
+# Helper function: convert Markdown to plain text
 ##############################################################################
 sub Claude_MarkdownToPlain {
     my ($text) = @_;
@@ -638,11 +933,29 @@ sub Claude_MarkdownToPlain {
 }
 
 ##############################################################################
-# Hilfsfunktion: Markdown in HTML konvertieren
+# Helper function: convert Markdown to HTML
+##############################################################################
+sub Claude_EscapeHtml {
+    my ($text) = @_;
+    return '' unless defined $text;
+
+    $text =~ s/&/&amp;/g;
+    $text =~ s/</&lt;/g;
+    $text =~ s/>/&gt;/g;
+    $text =~ s/"/&quot;/g;
+    $text =~ s/'/&#39;/g;
+
+    return $text;
+}
+
+##############################################################################
+# Helper function: convert Markdown to HTML
 ##############################################################################
 sub Claude_MarkdownToHTML {
     my ($text) = @_;
     return '' unless defined $text;
+
+    $text = Claude_EscapeHtml($text);
 
     $text =~ s/```[^\n]*\n(.*?)```/<pre><code>$1<\/code><\/pre>/gms;
     $text =~ s/\*\*(.+?)\*\*/<b>$1<\/b>/gs;
@@ -658,13 +971,29 @@ sub Claude_MarkdownToHTML {
     $text =~ s/^#\s+(.+)$/<h3>$1<\/h3>/gm;
     $text =~ s/((?:^[\-\*]\s+.+\n?)+)/my $block = $1; $block =~ s{^[\-\*]\s+(.+)$}{<li>$1<\/li>}gm; "<ul>$block<\/ul>"/gme;
     $text =~ s/^(?:---|\*\*\*)\s*$/<hr>/gm;
-    $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[3-6]|\/h[3-6]|pre|\/pre|hr))/<br>\n/g;
+    $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[3-6]|\/h[3-6]|pre|\/pre|code|\/code|hr))/<br>\n/g;
 
     return $text;
 }
 
 ##############################################################################
-# Hilfsfunktion: Antwort fuer Sprachausgabe in SSML umwandeln
+# Helper function: convert response to SSML for speech output
+##############################################################################
+sub Claude_EscapeSsml {
+    my ($text) = @_;
+    return '' unless defined $text;
+
+    $text =~ s/&/&amp;/g;
+    $text =~ s/</&lt;/g;
+    $text =~ s/>/&gt;/g;
+    $text =~ s/"/&quot;/g;
+    $text =~ s/'/&apos;/g;
+
+    return $text;
+}
+
+##############################################################################
+# Helper function: convert response to SSML for speech output
 ##############################################################################
 sub Claude_MarkdownToSSML {
     my ($text) = @_;
@@ -728,12 +1057,13 @@ sub Claude_MarkdownToSSML {
     $text =~ s/:\././g;
     $text =~ s/\s{2,}/ /g;
     $text =~ s/^\s+|\s+$//g;
+    $text = Claude_EscapeSsml($text);
 
     return "<speak>$text</speak>";
 }
 
 ##############################################################################
-# Hilfsfunktion: MIME-Typ anhand Dateiendung bestimmen
+# Helper function: determine MIME type from file extension
 ##############################################################################
 sub Claude_GetMimeType {
     my ($filePath) = @_;
@@ -755,7 +1085,7 @@ sub Claude_GetMimeType {
 }
 
 ##############################################################################
-# Hilfsfunktionen fuer Blacklist von Readings/Befehlen
+# Helper functions for the blacklist of readings/commands
 ##############################################################################
 sub Claude_GetBlacklist {
     my ($hash) = @_;
@@ -779,6 +1109,9 @@ sub Claude_GetBlacklist {
     return grep { !$seen{$_}++ } (@default, @custom);
 }
 
+##############################################################################
+# Helper function: match strings against simple wildcard patterns
+##############################################################################
 sub Claude_GlobMatch {
     my ($str, $pattern) = @_;
     return 0 unless defined $str && defined $pattern;
@@ -806,6 +1139,9 @@ sub Claude_GlobMatch {
     return 1;
 }
 
+##############################################################################
+# Helper function: check whether a reading/command matches the blacklist
+##############################################################################
 sub Claude_IsBlacklisted {
     my ($name, @patterns) = @_;
     return 0 unless defined $name;
@@ -819,7 +1155,10 @@ sub Claude_IsBlacklisted {
 }
 
 ##############################################################################
-# FHEM Device-Kontext fuer Claude aufbauen
+# Build FHEM device context for Claude
+##############################################################################
+##############################################################################
+# Helper function: choose relevant readings for compact device context output
 ##############################################################################
 sub Claude_GetRelevantReadings {
     my ($devName, %opts) = @_;
@@ -878,6 +1217,9 @@ sub Claude_GetRelevantReadings {
     return @result;
 }
 
+##############################################################################
+# Helper function: build the askAboutDevices device context for Claude
+##############################################################################
 sub Claude_BuildDeviceContext {
     my ($hash) = @_;
     my $name = $hash->{NAME};
@@ -917,7 +1259,7 @@ sub Claude_BuildDeviceContext {
 
     my $contextMode = AttrVal($name, 'deviceContextMode', 'detailed');
 
-    my $context = "Aktueller Status der Smart-Home Geraete:\n";
+    my $context = "Aktueller Status der Smarthome Geraete:\n";
     my @blacklist = Claude_GetBlacklist($hash);
 
     for my $devName (@devices) {
@@ -969,14 +1311,14 @@ sub Claude_BuildDeviceContext {
             }
         }
 
-        Log3 $name, 5, "Claude ($name): Device-Kontext fuer $alias aufgebaut";
+        Log3 $name, 5, "Claude ($name): Device context built for $alias";
     }
 
     return $context;
 }
 
 ##############################################################################
-# Hilfsfunktion: Geraetekontext fuer control-Befehl aufbauen
+# Helper function: build device context for the control command
 ##############################################################################
 sub Claude_GetControlDevices {
     my ($hash) = @_;
@@ -1003,8 +1345,10 @@ sub Claude_GetControlDevices {
     }
 
     my $controlList = AttrVal($name, 'controlList', '');
+    $controlList = join(',', sort keys %main::defs) if $controlList eq '*';
     if ($controlList) {
         for my $devName (split(/\s*,\s*/, $controlList)) {
+            next unless defined $devName && $devName ne '';
             unless ($seen{$devName}) {
                 push @devices, $devName;
                 $seen{$devName} = 1;
@@ -1016,7 +1360,7 @@ sub Claude_GetControlDevices {
 }
 
 ##############################################################################
-# Hilfsfunktion: Geraetekontext fuer control-Befehl aufbauen
+# Helper function: build device context for the control command
 ##############################################################################
 sub Claude_BuildControlContext {
     my ($hash) = @_;
@@ -1067,7 +1411,7 @@ sub Claude_BuildControlContext {
 }
 
 ##############################################################################
-# Hilfsfunktion: Tool-Definitionen fuer Claude Tool Use zurueckgeben
+# Helper function: return tool definitions for Claude Tool Use
 ##############################################################################
 sub Claude_GetControlTools {
     return [
@@ -1098,7 +1442,7 @@ sub Claude_GetControlTools {
 }
 
 ##############################################################################
-# Hilfsfunktion: Gueltigen Claude-Chat fuer Tool-Use rekonstruieren
+# Helper function: reconstruct a valid Claude chat for tool use
 ##############################################################################
 sub Claude_DebugMessageSummary {
     my ($messages) = @_;
@@ -1143,6 +1487,9 @@ sub Claude_DebugMessageSummary {
     return '[' . join(' | ', @summary) . ']';
 }
 
+##############################################################################
+# Helper function: sanitize chat history into a valid Claude API message sequence
+##############################################################################
 sub Claude_SanitizeMessagesForApi {
     my ($messages, $logName) = @_;
     return [] unless $messages && ref($messages) eq 'ARRAY';
@@ -1217,18 +1564,32 @@ sub Claude_SanitizeMessagesForApi {
 }
 
 ##############################################################################
-# Hilfsfunktion: Control-Session-Chat zuruecksetzen (Fehlerbehandlung)
+# Helper function: reset control session chat (error handling)
 ##############################################################################
 sub Claude_RollbackControlSession {
     my ($hash) = @_;
-    my $startIdx = $hash->{CONTROL_START_IDX} // 0;
-    splice(@{$hash->{CHAT}}, $startIdx);
+    return unless $hash && ref($hash) eq 'HASH';
+
+    my $chat = $hash->{CHAT};
+    if ($chat && ref($chat) eq 'ARRAY') {
+        my $chatCount = scalar(@$chat);
+        my $startIdx = $hash->{CONTROL_START_IDX} // 0;
+
+        $startIdx = 0 if !defined $startIdx || $startIdx < 0;
+        $startIdx = $chatCount if $startIdx > $chatCount;
+
+        splice(@{$chat}, $startIdx);
+    }
+
     delete $hash->{CONTROL_START_IDX};
     delete $hash->{CONTROL_SUCCESSFUL_DEVICES};
     delete $hash->{CONTROL_SUCCESSFUL_COMMANDS};
     delete $hash->{CHAT_EXTRA_CONTEXT};
 }
 
+##############################################################################
+# Helper function: build context from the last successfully controlled devices
+##############################################################################
 sub Claude_BuildLastControlledContext {
     my ($hash) = @_;
     my $devices = $hash->{LAST_CONTROLLED_DEVICES};
@@ -1250,6 +1611,9 @@ sub Claude_BuildLastControlledContext {
     return "Zuletzt erfolgreich gesteuerte Geraete:\n  " . join("\n  ", @parts) . "\n";
 }
 
+##############################################################################
+# Helper function: build referential batch context for follow-up instructions
+##############################################################################
 sub Claude_BuildLastControlBatchContext {
     my ($hash) = @_;
     my $batch = $hash->{LAST_CONTROL_BATCH};
@@ -1284,6 +1648,9 @@ sub Claude_BuildLastControlBatchContext {
     return $batchContext;
 }
 
+##############################################################################
+# Helper function: compose the control-specific system prompt
+##############################################################################
 sub Claude_BuildControlSystemPrompt {
     my ($hash, %opts) = @_;
 
@@ -1307,6 +1674,9 @@ sub Claude_BuildControlSystemPrompt {
     return join("\n\n", @systemParts);
 }
 
+##############################################################################
+# Helper function: normalize natural language text for matching/comparison
+##############################################################################
 sub Claude_NormalizeText {
     my ($text) = @_;
     return '' unless defined $text;
@@ -1323,6 +1693,9 @@ sub Claude_NormalizeText {
     return $text;
 }
 
+##############################################################################
+# Helper function: infer device traits from commands, readings and metadata
+##############################################################################
 sub Claude_GetDeviceTraits {
     my ($devName) = @_;
     my %traits;
@@ -1365,6 +1738,9 @@ sub Claude_GetDeviceTraits {
     return \%traits;
 }
 
+##############################################################################
+# Helper function: derive searchable category tokens for a device
+##############################################################################
 sub Claude_GetDeviceCategoryTokens {
     my ($devName) = @_;
     return () unless defined $devName && $devName ne '' && exists $main::defs{$devName};
@@ -1419,6 +1795,9 @@ sub Claude_GetDeviceCategoryTokens {
     return sort keys %tokens;
 }
 
+##############################################################################
+# Helper function: extract normalized intent signals from an instruction
+##############################################################################
 sub Claude_GetIntentSignals {
     my ($instruction) = @_;
     my %signals;
@@ -1442,6 +1821,9 @@ sub Claude_GetIntentSignals {
     return \%signals;
 }
 
+##############################################################################
+# Helper function: define command families used by local command inference
+##############################################################################
 sub Claude_CommandFamilyDefinitions {
     return {
         switch_on         => [qw(on on-for-timer on-till on-till-overnight)],
@@ -1462,6 +1844,9 @@ sub Claude_CommandFamilyDefinitions {
     };
 }
 
+##############################################################################
+# Helper function: map an instruction to likely command families
+##############################################################################
 sub Claude_GetCommandFamiliesForInstruction {
     my ($instruction, $devices) = @_;
     return () unless defined $instruction;
@@ -1513,6 +1898,9 @@ sub Claude_GetCommandFamiliesForInstruction {
     return grep { !$seen{$_}++ } @families;
 }
 
+##############################################################################
+# Helper function: match a device category/type token in an instruction
+##############################################################################
 sub Claude_MatchDeviceType {
     my ($instruction, $devices) = @_;
     my $text = Claude_NormalizeText($instruction);
@@ -1580,6 +1968,9 @@ sub Claude_MatchDeviceType {
     return $best;
 }
 
+##############################################################################
+# Helper function: collect candidate set commands for an instruction
+##############################################################################
 sub Claude_GetCandidateCommandsForInstruction {
     my ($instruction, $devices) = @_;
     return () unless defined $instruction;
@@ -1608,6 +1999,9 @@ sub Claude_GetCandidateCommandsForInstruction {
     return @candidates;
 }
 
+##############################################################################
+# Helper function: choose a command supported by all candidate devices
+##############################################################################
 sub Claude_ResolveCommandFromCandidates {
     my ($devices, $candidates) = @_;
     return '' unless $devices && ref($devices) eq 'ARRAY' && @$devices;
@@ -1620,6 +2014,9 @@ sub Claude_ResolveCommandFromCandidates {
     return '';
 }
 
+##############################################################################
+# Helper function: choose a value command valid for all candidate devices
+##############################################################################
 sub Claude_ResolveValueCommandFromCandidates {
     my ($devices, $candidates, $value) = @_;
     return '' unless defined $value && $value ne '';
@@ -1637,6 +2034,9 @@ sub Claude_ResolveValueCommandFromCandidates {
     return '';
 }
 
+##############################################################################
+# Helper function: match a room token referenced in an instruction
+##############################################################################
 sub Claude_MatchRoomToken {
     my ($instruction, $devices) = @_;
     my $text = Claude_NormalizeText($instruction);
@@ -1668,6 +2068,9 @@ sub Claude_MatchRoomToken {
     return '';
 }
 
+##############################################################################
+# Helper function: decide whether a room label is suitable for summaries
+##############################################################################
 sub Claude_IsSpeakableRoomLabel {
     my ($room) = @_;
     return 0 unless defined $room && $room ne '';
@@ -1686,6 +2089,9 @@ sub Claude_IsSpeakableRoomLabel {
     return 1;
 }
 
+##############################################################################
+# Helper function: infer a shared room label from a device list
+##############################################################################
 sub Claude_InferDominantRoomFromDevices {
     my ($devices) = @_;
     return '' unless $devices && ref($devices) eq 'ARRAY' && @$devices;
@@ -1720,6 +2126,9 @@ sub Claude_InferDominantRoomFromDevices {
     return $roomLabel{$bestNorm} // '';
 }
 
+##############################################################################
+# Helper function: convert a room label to simple title case for output
+##############################################################################
 sub Claude_TitleCaseRoomLabel {
     my ($room) = @_;
     return '' unless defined $room && $room ne '';
@@ -1734,6 +2143,9 @@ sub Claude_TitleCaseRoomLabel {
     return join(' ', @parts);
 }
 
+##############################################################################
+# Helper function: resolve the remembered room label from the last batch
+##############################################################################
 sub Claude_GetRememberedBatchRoomLabel {
     my ($hash, $devices, $batchOverride) = @_;
     return '' unless $hash && ref($hash) eq 'HASH';
@@ -1760,6 +2172,9 @@ sub Claude_GetRememberedBatchRoomLabel {
     return '';
 }
 
+##############################################################################
+# Helper function: decide whether remembered batch room context should win
+##############################################################################
 sub Claude_ShouldPreferRememberedBatchRoom {
     my ($hash, $instruction, $devices, $batchOverride) = @_;
     return 0 unless $hash && ref($hash) eq 'HASH';
@@ -1778,17 +2193,12 @@ sub Claude_ShouldPreferRememberedBatchRoom {
     return ($currentNorm ne '' && $rememberedNorm ne '' && $currentNorm eq $rememberedNorm) ? 1 : 0;
 }
 
-sub Claude_GetDeviceCommandMap {
-    my ($devName) = @_;
-    my %commands;
-    return \%commands unless defined $devName && $devName ne '' && exists $main::defs{$devName};
-
-    my $setListRaw = main::getAllSets($devName) // '';
-    $setListRaw =~ s/\r\n/\n/g;
-    $setListRaw =~ s/[\r\t]+/ /g;
-    $setListRaw =~ s/^\s+|\s+$//g;
-
-    return \%commands if $setListRaw eq '';
+##############################################################################
+# Helper function: parse and normalize the available set commands of a device
+##############################################################################
+sub Claude_SplitTopLevelWhitespace {
+    my ($text) = @_;
+    return () unless defined $text && $text ne '';
 
     my @entries;
     my $buffer = '';
@@ -1799,7 +2209,7 @@ sub Claude_GetDeviceCommandMap {
     my $bracket_depth = 0;
     my $escaped = 0;
 
-    for my $char (split(//, $setListRaw)) {
+    for my $char (split(//, $text)) {
         if ($escaped) {
             $buffer .= $char;
             $escaped = 0;
@@ -1845,26 +2255,103 @@ sub Claude_GetDeviceCommandMap {
     }
 
     push @entries, $buffer if $buffer ne '';
+    return @entries;
+}
 
-    for my $entry (@entries) {
-        next unless defined $entry;
-        $entry =~ s/^\s+|\s+$//g;
-        next if $entry eq '';
+##############################################################################
+# Helper function: extract a normalized command name from a set-list entry
+##############################################################################
+sub Claude_ParseSetListEntry {
+    my ($entry) = @_;
+    return ('', '') unless defined $entry;
 
-        my ($cmdName, $spec) = split(/:/, $entry, 2);
-        next unless defined $cmdName && $cmdName ne '';
-        next if $cmdName =~ /^\?/;
-        next if $cmdName =~ /\s/;
+    $entry =~ s/^\s+|\s+$//g;
+    return ('', '') if $entry eq '';
+    return ('', '') if $entry =~ /^\?/;
 
-        $spec = '' unless defined $spec;
-        $spec =~ s/^\s+|\s+$//g;
+    my ($cmdName, $spec) = split(/:/, $entry, 2);
+    return ('', '') unless defined $cmdName;
 
-        $commands{$cmdName} = $spec;
+    $cmdName =~ s/^\s+|\s+$//g;
+    return ('', '') if $cmdName eq '';
+    return ('', '') if $cmdName =~ /\s/;
+    return ('', '') unless $cmdName =~ /^[A-Za-z0-9_.#+\-]+$/;
+
+    $spec = '' unless defined $spec;
+    $spec =~ s/^\s+|\s+$//g;
+
+    return ($cmdName, $spec);
+}
+
+##############################################################################
+# Helper function: parse and normalize the available set commands of a device
+##############################################################################
+sub Claude_ExtractSetListEntries {
+    my ($raw) = @_;
+    return () unless defined $raw && $raw ne '';
+
+    my $setListRaw = $raw;
+    $setListRaw =~ s/\r\n/\n/g;
+    $setListRaw =~ s/\r/\n/g;
+    $setListRaw =~ s/\t/ /g;
+    $setListRaw =~ s/^\s+|\s+$//g;
+    return () if $setListRaw eq '';
+
+    my @entries;
+    my %seen;
+
+    for my $entry (Claude_SplitTopLevelWhitespace($setListRaw)) {
+        next unless defined $entry && $entry ne '';
+        next if $seen{$entry}++;
+        push @entries, $entry;
+    }
+
+    for my $line (split(/\n/, $setListRaw)) {
+        $line =~ s/^\s+|\s+$//g;
+        next if $line eq '';
+
+        while ($line =~ /(?:^|\s)([A-Za-z0-9_.#+\-]+)(?::((?:[^{}\[\]()"'\s]+|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\})*))?/g) {
+            my $cmdName = $1;
+            my $spec = defined $2 ? $2 : '';
+            my $entry = $cmdName . ($spec ne '' ? ":$spec" : '');
+            next if $seen{$entry}++;
+            push @entries, $entry;
+        }
+    }
+
+    return @entries;
+}
+
+##############################################################################
+# Helper function: parse and normalize the available set commands of a device
+##############################################################################
+sub Claude_GetDeviceCommandMap {
+    my ($devName) = @_;
+    my %commands;
+    return \%commands unless defined $devName && $devName ne '' && exists $main::defs{$devName};
+
+    my @rawSources = (
+        main::getAllSets($devName),
+        AttrVal($devName, 'setList', ''),
+        AttrVal($devName, 'setExtensions', '')
+    );
+
+    for my $raw (@rawSources) {
+        next unless defined $raw && $raw ne '';
+
+        for my $entry (Claude_ExtractSetListEntries($raw)) {
+            my ($cmdName, $spec) = Claude_ParseSetListEntry($entry);
+            next unless $cmdName ne '';
+            $commands{$cmdName} = $spec unless exists $commands{$cmdName};
+        }
     }
 
     return \%commands;
 }
 
+##############################################################################
+# Helper function: check whether a device supports a specific set command
+##############################################################################
 sub Claude_DeviceSupportsCommand {
     my ($devName, $command) = @_;
     return 0 unless defined $devName && defined $command && $command ne '';
@@ -1873,6 +2360,9 @@ sub Claude_DeviceSupportsCommand {
     return exists $commandMap->{$command} ? 1 : 0;
 }
 
+##############################################################################
+# Helper function: check whether all devices support a specific command
+##############################################################################
 sub Claude_AllDevicesSupportCommand {
     my ($devices, $command) = @_;
     return 0 unless $devices && ref($devices) eq 'ARRAY' && @$devices;
@@ -1885,6 +2375,9 @@ sub Claude_AllDevicesSupportCommand {
     return 1;
 }
 
+##############################################################################
+# Helper function: normalize set-list values for comparisons
+##############################################################################
 sub Claude_NormalizeSetSpecValue {
     my ($value) = @_;
     return '' unless defined $value;
@@ -1900,6 +2393,9 @@ sub Claude_NormalizeSetSpecValue {
     return $normalized;
 }
 
+##############################################################################
+# Helper function: validate a value against the command spec of a device
+##############################################################################
 sub Claude_DeviceSupportsValueForCommand {
     my ($devName, $command, $value) = @_;
     return 0 unless defined $devName && defined $command && defined $value;
@@ -1921,6 +2417,10 @@ sub Claude_DeviceSupportsValueForCommand {
         return ($numericValue >= $min && $numericValue <= $max) ? 1 : 0;
     }
 
+    if ($spec =~ /^(?:textField(?:-long)?|colorpicker|color|time|date|datetime|multiple(?:-strict)?|reading|knob|noArg)$/i) {
+        return 1;
+    }
+
     if ($spec =~ /^([^,]+(?:,[^,]+)*)$/) {
         my %allowed = map { Claude_NormalizeSetSpecValue($_) => 1 } split(/,/, $spec);
         return exists $allowed{$normalizedValue} ? 1 : 0;
@@ -1929,6 +2429,9 @@ sub Claude_DeviceSupportsValueForCommand {
     return 1;
 }
 
+##############################################################################
+# Helper function: reject instructions that are too complex for local execution
+##############################################################################
 sub Claude_IsLocalInstructionStructurallySafe {
     my ($instruction) = @_;
     return 0 unless defined $instruction;
@@ -1940,7 +2443,7 @@ sub Claude_IsLocalInstructionStructurallySafe {
     $rawText =~ s/^\s+|\s+$//g;
 
     return 0 if $rawText =~ /[,;:]/;
-    return 0 if $rawText =~ /\b(?:aber|jedoch|sondern|statt|ausser|sowie|waehrend|wahrend|bis auf|mit ausnahme|erst|zuerst|anschliessend|anschliesend|nur|lediglich|ausschliesslich|nicht|kein|keine|keinen|keinem|keiner|wenn|falls|spaeter)\b/;
+    return 0 if $rawText =~ /\b(?:aber|jedoch|sondern|statt|ausser|sowie|waehrend|wahrend|bis auf|mit ausnahme|erst|zuerst|anschliessend|anschliesend|danach|dann|nur|lediglich|ausschliesslich|nicht|kein|keine|keinen|keinem|keiner|keines|keins|ohne|wenn|falls|sonst|spaeter|spater|nachher|vorher|gleichzeitig)\b/;
 
     my $text = Claude_NormalizeText($instruction);
     $text =~ s/\b(?:bitte|mal)\b/ /g;
@@ -1948,10 +2451,12 @@ sub Claude_IsLocalInstructionStructurallySafe {
     $text =~ s/^\s+|\s+$//g;
     return 0 if $text eq '';
 
-    return 0 if $text =~ /\b(?:haelfte|halb|teil|ein paar|paar|mehrere|wenige|einige)\b/;
+    return 0 if $text =~ /\b(?:haelfte|halb|teil|ein paar|paar|mehrere|wenige|einige|alle ausser|bis auf|ausser)\b/;
+    return 0 if $text =~ /\b(?:und|oder)\b/;
+    return 0 if $text =~ /\b(?:prozent)\b/ && $text !~ /\b-?\d+(?:[.,]\d+)?\s*prozent\b/;
 
     my @actionPositions;
-    while ($text =~ /\b(?:schalte|schalt|mache|mach|lass|lasse|schalten|einschalten|ausschalten|anmachen|ausmachen|umschalten|dimme|dimmen|oeffne|oeffnen|schliesse|schliessen|fahre|stoppe|stelle|setz|setze)\b/g) {
+    while ($text =~ /\b(?:schalte|schalt|mache|mach|lass|lasse|schalten|einschalten|ausschalten|anmachen|ausmachen|umschalten|dimme|dimmen|oeffne|oeffnen|schliesse|schliessen|fahre|stoppe|stelle|setz|setze|erhoehe|verringere|senke)\b/g) {
         push @actionPositions, pos($text);
         return 0 if @actionPositions > 1;
     }
@@ -1959,6 +2464,9 @@ sub Claude_IsLocalInstructionStructurallySafe {
     return 1;
 }
 
+##############################################################################
+# Helper function: classify an instruction for local resolver handling
+##############################################################################
 sub Claude_InferIntentClass {
     my ($instruction, $hash) = @_;
     return 'unsupported' unless defined $instruction;
@@ -1983,7 +2491,7 @@ sub Claude_InferIntentClass {
 
         if ($hash && ref($hash) eq 'HASH') {
             my $name = $hash->{NAME} // '-';
-            Log3 $name, 4, "Claude ($name): LocalResolver referential-followup verworfen wegen konkretem Ziel aliasMatches=[" . join(', ', @aliasMatches) . "] room='$room' type='$type'";
+            Log3 $name, 4, "Claude ($name): LocalResolver discarded referential follow-up because of a concrete target aliasMatches=[" . join(', ', @aliasMatches) . "] room='$room' type='$type'";
         }
     }
 
@@ -1993,6 +2501,9 @@ sub Claude_InferIntentClass {
     return 'unsupported';
 }
 
+##############################################################################
+# Helper function: infer a value-based command and value from text
+##############################################################################
 sub Claude_InferValueCommand {
     my ($instruction, $devices) = @_;
     return ('', '') unless defined $instruction;
@@ -2012,6 +2523,9 @@ sub Claude_InferValueCommand {
     return ('', '');
 }
 
+##############################################################################
+# Helper function: infer a plain device command from text
+##############################################################################
 sub Claude_InferDeviceCommand {
     my ($instruction, $devices) = @_;
     return ('', '') unless defined $instruction;
@@ -2023,6 +2537,9 @@ sub Claude_InferDeviceCommand {
     return ('', '');
 }
 
+##############################################################################
+# Helper function: match concrete devices by alias/name tokens
+##############################################################################
 sub Claude_MatchDevicesByAlias {
     my ($instruction, $devices) = @_;
     return () unless defined $instruction;
@@ -2067,11 +2584,17 @@ sub Claude_MatchDevicesByAlias {
     return @matched;
 }
 
+##############################################################################
+# Helper function: central wrapper for local command inference
+##############################################################################
 sub Claude_InferLocalCommand {
     my ($instruction, $devices) = @_;
     return Claude_InferDeviceCommand($instruction, $devices);
 }
 
+##############################################################################
+# Helper function: normalize category/type aliases to canonical tokens
+##############################################################################
 sub Claude_NormalizeDeviceTypeToken {
     my ($token) = @_;
     return '' unless defined $token && $token ne '';
@@ -2088,6 +2611,9 @@ sub Claude_NormalizeDeviceTypeToken {
     return $token;
 }
 
+##############################################################################
+# Helper function: test whether a device matches a normalized type token
+##############################################################################
 sub Claude_DeviceMatchesNormalizedType {
     my ($devName, $type) = @_;
     return 0 unless defined $devName && $devName ne '';
@@ -2132,6 +2658,9 @@ sub Claude_DeviceMatchesNormalizedType {
     return exists $tokenSet{$normalizedType} ? 1 : 0;
 }
 
+##############################################################################
+# Helper function: build a human-friendly group label from device traits
+##############################################################################
 sub Claude_InferGroupLabelFromDevices {
     my ($devices) = @_;
     return 'Die Geraete' unless $devices && ref($devices) eq 'ARRAY' && @$devices;
@@ -2161,6 +2690,9 @@ sub Claude_InferGroupLabelFromDevices {
     return 'Die Geraete';
 }
 
+##############################################################################
+# Helper function: build a deterministic variant index for local summaries
+##############################################################################
 sub Claude_LocalSummaryVariantIndex {
     my ($hash, $bucket, @seedParts) = @_;
 
@@ -2178,6 +2710,9 @@ sub Claude_LocalSummaryVariantIndex {
     return $sum;
 }
 
+##############################################################################
+# Helper function: choose a weighted wording variant for local summaries
+##############################################################################
 sub Claude_LocalSummaryChooseWeighted {
     my ($hash, $bucket, $weightedValues, @seedParts) = @_;
     return '' unless $weightedValues && ref($weightedValues) eq 'ARRAY' && @$weightedValues;
@@ -2205,6 +2740,9 @@ sub Claude_LocalSummaryChooseWeighted {
     return $weightedValues->[0][0];
 }
 
+##############################################################################
+# Helper function: choose a temporal adverb for local summaries
+##############################################################################
 sub Claude_LocalSummaryTemporalAdverb {
     my ($hash, $instruction, $command, $devices, $subject, $hasRepeatCue) = @_;
 
@@ -2224,6 +2762,9 @@ sub Claude_LocalSummaryTemporalAdverb {
     );
 }
 
+##############################################################################
+# Helper function: choose a repeat phrase for follow-up summaries
+##############################################################################
 sub Claude_LocalSummaryRepeatPhrase {
     my ($hash, $instruction, $command, $subject) = @_;
 
@@ -2241,6 +2782,9 @@ sub Claude_LocalSummaryRepeatPhrase {
     );
 }
 
+##############################################################################
+# Helper function: choose a verb for value-setting summaries
+##############################################################################
 sub Claude_LocalSummarySetVerb {
     my ($hash, $instruction, $command, $subject) = @_;
 
@@ -2257,6 +2801,9 @@ sub Claude_LocalSummarySetVerb {
     );
 }
 
+##############################################################################
+# Helper function: choose a generic completion verb for summaries
+##############################################################################
 sub Claude_LocalSummaryDoneVerb {
     my ($hash, $instruction, $command, $subject, $isSingle) = @_;
 
@@ -2274,6 +2821,9 @@ sub Claude_LocalSummaryDoneVerb {
     );
 }
 
+##############################################################################
+# Helper function: choose a motion verb for cover movement summaries
+##############################################################################
 sub Claude_LocalSummaryMotionPhrase {
     my ($hash, $instruction, $command, $subject, $takesSingular) = @_;
 
@@ -2300,6 +2850,9 @@ sub Claude_LocalSummaryMotionPhrase {
     );
 }
 
+##############################################################################
+# Helper function: choose a movement direction phrase for summaries
+##############################################################################
 sub Claude_LocalSummaryMotionDirectionPhrase {
     my ($hash, $instruction, $command, $subject, $takesSingular) = @_;
 
@@ -2326,6 +2879,9 @@ sub Claude_LocalSummaryMotionDirectionPhrase {
     );
 }
 
+##############################################################################
+# Helper function: infer a display unit for local summary values
+##############################################################################
 sub Claude_LocalSummaryValueUnit {
     my ($command) = @_;
     return '%'    if defined $command && $command =~ /^(?:pct|bri|brightness|position)\b/;
@@ -2333,6 +2889,9 @@ sub Claude_LocalSummaryValueUnit {
     return '';
 }
 
+##############################################################################
+# Helper function: build a natural-language value phrase for summaries
+##############################################################################
 sub Claude_LocalSummaryValuePhrase {
     my ($hash, $instruction, $command, $subject, $value, $unit, $takesSingular) = @_;
 
@@ -2357,6 +2916,9 @@ sub Claude_LocalSummaryValuePhrase {
     );
 }
 
+##############################################################################
+# Helper function: build the final local control response sentence
+##############################################################################
 sub Claude_BuildLocalControlSummary {
     my ($instruction, $command, $devices, $hash, %opts) = @_;
     my $count = $devices && ref($devices) eq 'ARRAY' ? scalar(@$devices) : 0;
@@ -2502,6 +3064,9 @@ sub Claude_BuildLocalControlSummary {
     return "$subject wurden $doneVerb.";
 }
 
+##############################################################################
+# Helper function: execute a locally resolved batch command
+##############################################################################
 sub Claude_ExecuteLocalResolvedBatch {
     my ($hash, $instruction, $devices, $command, $value) = @_;
     return 0 unless $devices && ref($devices) eq 'ARRAY' && @$devices;
@@ -2544,25 +3109,83 @@ sub Claude_ExecuteLocalResolvedBatch {
     utf8::encode($lastCmd) if utf8::is_utf8($lastCmd);
 
     my $summary = Claude_BuildLocalControlSummary($instruction, $setSuffix, \@successfulDevices, $hash);
-    my $plain = $summary;
-    my $html  = $summary;
-    my $ssml  = "<speak>$summary</speak>";
+    my $plain = Claude_MarkdownToPlain($summary);
+    my $html  = Claude_MarkdownToHTML($summary);
+    my $ssml  = Claude_MarkdownToSSML($summary);
+
+    my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
 
     readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'lastCommand',       $lastCmd);
-    readingsBulkUpdate($hash, 'lastCommandResult', 'ok');
-    readingsBulkUpdate($hash, 'response',          $summary);
-    readingsBulkUpdate($hash, 'responsePlain',     $plain);
-    readingsBulkUpdate($hash, 'responseHTML',      $html);
-    readingsBulkUpdate($hash, 'responseSSML',      $ssml);
-    readingsBulkUpdate($hash, 'state',             'ok');
-    readingsBulkUpdate($hash, 'lastError',         '-');
+    readingsBulkUpdate($hash, 'lastCommand',              $lastCmd);
+    readingsBulkUpdate($hash, 'lastCommandResult',        'ok');
+    readingsBulkUpdate($hash, 'response',                 $summary);
+    readingsBulkUpdate($hash, 'responsePlain',            $plain);
+    readingsBulkUpdate($hash, 'responseHTML',             $html);
+    readingsBulkUpdate($hash, 'responseSSML',             $ssml);
+    readingsBulkUpdate($hash, 'state',                    'ok');
+    readingsBulkUpdate($hash, 'lastError',                '-');
+    readingsBulkUpdate($hash, 'lastRequestType',          'control');
+    readingsBulkUpdate($hash, 'lastRequestWasLocal',      '1');
+    readingsBulkUpdate($hash, 'lastApiCallUsedTools',     '0');
+    readingsBulkUpdate($hash, 'toolUseCount',             '0');
+    readingsBulkUpdate($hash, 'toolSetDeviceCount',       '0');
+    readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  '0');
+    readingsBulkUpdate($hash, 'stopReason',               'local');
+    readingsBulkUpdate($hash, 'stopSequence',             '-');
+    readingsBulkUpdate($hash, 'stopDetails',              '-');
+    readingsBulkUpdate($hash, 'responseId',               '-');
+    readingsBulkUpdate($hash, 'responseType',             'local');
+    readingsBulkUpdate($hash, 'responseRole',             'assistant');
+    readingsBulkUpdate($hash, 'serviceTier',              '-');
+    readingsBulkUpdate($hash, 'inferenceGeo',             '-');
+    if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'cacheCreationInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheReadInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-');
+    }
     readingsEndUpdate($hash, 1);
 
-    Log3 $name, 4, "Claude ($name): Lokale Schnellaufloesung ausgefuehrt: command=$command devices=" . join(', ', @successfulDevices);
+    if (!$showAdvancedTokenReadings) {
+        Claude_ClearAdvancedTokenReadings($hash);
+    }
+
+    Log3 $name, 4, "Claude ($name): Local quick resolution executed: command=$command devices=" . join(', ', @successfulDevices);
     return 1;
 }
 
+##############################################################################
+# Main helper: try to execute a control instruction without an API round-trip
+##############################################################################
+sub Claude_ShouldAllowLocalResolution {
+    my ($instruction, $matchedDevices) = @_;
+    return 0 unless defined $instruction && $instruction ne '';
+    return 0 unless Claude_IsLocalInstructionStructurallySafe($instruction);
+
+    my $text = Claude_NormalizeText($instruction);
+    return 0 if $text eq '';
+
+    my $signals = Claude_GetIntentSignals($instruction);
+    return 0 if (!$signals->{numeric_value} && $text =~ /\b(?:auf|um)\b/ && $text =~ /\b(?:uhr|morgen|abend|nacht)\b/);
+
+    return 0 if $text =~ /\b(?:nicht|kein|keine|keinen|keinem|keiner|keines|ohne|ausser|bis auf)\b/;
+    return 0 if $text =~ /\b(?:oder|entweder|weder)\b/;
+    return 0 if $text =~ /\b(?:alle|gesamt|saemtliche|sämtliche)\b/ && $text =~ /\b(?:bis auf|ausser|ohne)\b/;
+
+    if ($matchedDevices && ref($matchedDevices) eq 'ARRAY' && @$matchedDevices) {
+        my $room = Claude_MatchRoomToken($instruction, $matchedDevices);
+        my $type = Claude_MatchDeviceType($instruction, $matchedDevices);
+        my @aliasMatches = Claude_MatchDevicesByAlias($instruction, $matchedDevices);
+
+        return 0 if @aliasMatches > 1 && ($room ne '' || $type ne '');
+    }
+
+    return 1;
+}
+
+##############################################################################
+# Main helper: try to execute a control instruction without an API round-trip
+##############################################################################
 sub Claude_TryResolveControlLocally {
     my ($hash, $instruction) = @_;
     return 0 unless defined $instruction && $instruction ne '';
@@ -2651,6 +3274,11 @@ sub Claude_TryResolveControlLocally {
         return 0;
     }
 
+    unless (Claude_ShouldAllowLocalResolution($instruction, \@matched)) {
+        Log3 $name, 4, "$logPrefix abort: structural safety veto after target resolution";
+        return 0;
+    }
+
     my ($command, $value) = ('', '');
 
     if ($intentClass eq 'device_command') {
@@ -2685,6 +3313,9 @@ sub Claude_TryResolveControlLocally {
     return $ok;
 }
 
+##############################################################################
+# Helper function: store the last successfully controlled devices
+##############################################################################
 sub Claude_RememberControlledDevices {
     my ($hash, $devices) = @_;
     return unless $devices && ref($devices) eq 'ARRAY';
@@ -2694,6 +3325,9 @@ sub Claude_RememberControlledDevices {
     $hash->{LAST_CONTROLLED_DEVICES} = \@unique;
 }
 
+##############################################################################
+# Helper function: persist the last successful control batch for follow-ups
+##############################################################################
 sub Claude_RememberControlBatch {
     my ($hash, $instruction, $successfulDevices, $successfulCommands) = @_;
     return unless $hash && ref($hash) eq 'HASH';
@@ -2725,6 +3359,9 @@ sub Claude_RememberControlBatch {
     };
 }
 
+##############################################################################
+# Helper function: detect repeat wording in a follow-up instruction
+##############################################################################
 sub Claude_HasRepeatCue {
     my ($instruction) = @_;
     return 0 unless defined $instruction;
@@ -2735,6 +3372,9 @@ sub Claude_HasRepeatCue {
     return ($text =~ /\b(?:wieder|nochmal|erneut)\b/) ? 1 : 0;
 }
 
+##############################################################################
+# Helper function: detect referential follow-up instructions
+##############################################################################
 sub Claude_IsReferentialFollowupInstruction {
     my ($instruction, $hash) = @_;
     return 0 unless defined $instruction;
@@ -2749,14 +3389,6 @@ sub Claude_IsReferentialFollowupInstruction {
 
     return 0 unless $hasAction && ($hasPronoun || $hasRepeat);
 
-    my @controlDevices = ($hash && ref($hash) eq 'HASH') ? Claude_GetControlDevices($hash) : ();
-    my @aliasMatches   = @controlDevices ? Claude_MatchDevicesByAlias($instruction, \@controlDevices) : ();
-    my $room           = @controlDevices ? Claude_MatchRoomToken($instruction, \@controlDevices) : '';
-    my $type           = @controlDevices ? Claude_MatchDeviceType($instruction, \@controlDevices) : '';
-
-    my $hasConcreteTarget = (@aliasMatches || $room ne '' || $type ne '') ? 1 : 0;
-    return 0 if $hasConcreteTarget;
-
     my $batch = ($hash && ref($hash) eq 'HASH') ? $hash->{LAST_CONTROL_BATCH} : undef;
     $batch = undef unless $batch && ref($batch) eq 'HASH';
     return 0 unless $batch && $batch->{devices} && ref($batch->{devices}) eq 'ARRAY' && @{$batch->{devices}};
@@ -2764,6 +3396,9 @@ sub Claude_IsReferentialFollowupInstruction {
     return 1;
 }
 
+##############################################################################
+# Helper function: expand follow-up instructions with remembered target context
+##############################################################################
 sub Claude_ExpandReferentialInstruction {
     my ($hash, $instruction) = @_;
     return $instruction unless Claude_IsReferentialFollowupInstruction($instruction, $hash);
@@ -2791,18 +3426,27 @@ sub Claude_ExpandReferentialInstruction {
     return $expanded;
 }
 
+##############################################################################
+# Helper function: infer a batch command for remembered target sets
+##############################################################################
 sub Claude_InferReferentialBatchCommand {
     my ($instruction, $devices) = @_;
-    return undef unless defined $instruction;
-    return undef unless $devices && ref($devices) eq 'ARRAY' && @$devices;
+    return ('', '') unless defined $instruction;
+    return ('', '') unless $devices && ref($devices) eq 'ARRAY' && @$devices;
+
+    my ($valueCommand, $value) = Claude_InferValueCommand($instruction, $devices);
+    return ($valueCommand, $value) if defined $valueCommand && $valueCommand ne '';
 
     my @candidates = Claude_GetCandidateCommandsForInstruction($instruction, $devices);
     my $command = Claude_ResolveCommandFromCandidates($devices, \@candidates);
 
-    return $command if defined $command && $command ne '';
-    return undef;
+    return ($command, '') if defined $command && $command ne '';
+    return ('', '');
 }
 
+##############################################################################
+# Helper function: finalize remembered devices/commands after a control session
+##############################################################################
 sub Claude_FinalizeRememberedControlSession {
     my ($hash) = @_;
 
@@ -2816,9 +3460,12 @@ sub Claude_FinalizeRememberedControlSession {
     Claude_RememberControlBatch($hash, $instruction, $devices, $commands);
 
     my $name = $hash->{NAME};
-    Log3 $name, 4, "Claude ($name): Finalisiere Control-Session fuer letzte Zielmenge: " . join(', ', @$devices);
+    Log3 $name, 4, "Claude ($name): Finalizing control session for last target set: " . join(', ', @$devices);
 }
 
+##############################################################################
+# Helper function: execute referential follow-up instructions locally
+##############################################################################
 sub Claude_ExecuteReferentialBatchLocally {
     my ($hash, $instruction) = @_;
     return 0 unless Claude_IsReferentialFollowupInstruction($instruction, $hash);
@@ -2831,13 +3478,14 @@ sub Claude_ExecuteReferentialBatchLocally {
     my $devices = $batch->{devices};
     return 0 unless $devices && ref($devices) eq 'ARRAY' && @$devices;
 
-    my $command = Claude_InferReferentialBatchCommand($instruction, $devices);
+    my ($command, $value) = Claude_InferReferentialBatchCommand($instruction, $devices);
     return 0 unless defined $command && $command ne '';
 
     my $name = $hash->{NAME};
     my @successfulDevices;
     my @successfulCommands;
     my @executedLines;
+    my $setSuffix = defined $value && $value ne '' ? "$command $value" : $command;
 
     my %allowed = map { $_ => 1 } Claude_GetControlDevices($hash);
 
@@ -2845,19 +3493,24 @@ sub Claude_ExecuteReferentialBatchLocally {
         next unless defined $device && $device ne '';
         next unless $allowed{$device};
         next unless exists $main::defs{$device};
-        next unless Claude_DeviceSupportsCommand($device, $command);
 
-        my $setResult = CommandSet(undef, "$device $command");
+        if (defined $value && $value ne '') {
+            next unless Claude_DeviceSupportsValueForCommand($device, $command, $value);
+        } else {
+            next unless Claude_DeviceSupportsCommand($device, $command);
+        }
+
+        my $setResult = CommandSet(undef, "$device $setSuffix");
         $setResult //= 'ok';
         $setResult = 'ok' if $setResult eq '';
 
-        Log3 $name, 3, "Claude ($name): local referential batch set $device $command -> $setResult";
+        Log3 $name, 3, "Claude ($name): local referential batch set $device $setSuffix -> $setResult";
 
         next unless $setResult eq 'ok';
 
         push @successfulDevices,  $device;
         push @successfulCommands, $command;
-        push @executedLines, "$device $command";
+        push @executedLines, "$device $setSuffix";
     }
 
     return 0 unless @successfulDevices;
@@ -2870,33 +3523,59 @@ sub Claude_ExecuteReferentialBatchLocally {
 
     my $summary = Claude_BuildLocalControlSummary(
         $instruction,
-        $command,
+        $setSuffix,
         \@successfulDevices,
         $hash,
         reference_batch => \%previousBatch
     );
 
-    my $plain = $summary;
-    my $html  = $summary;
-    my $ssml  = "<speak>$summary</speak>";
+    my $plain = Claude_MarkdownToPlain($summary);
+    my $html  = Claude_MarkdownToHTML($summary);
+    my $ssml  = Claude_MarkdownToSSML($summary);
+
+    my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
 
     readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'lastCommand',       $lastCmd);
-    readingsBulkUpdate($hash, 'lastCommandResult', 'ok');
-    readingsBulkUpdate($hash, 'response',          $summary);
-    readingsBulkUpdate($hash, 'responsePlain',     $plain);
-    readingsBulkUpdate($hash, 'responseHTML',      $html);
-    readingsBulkUpdate($hash, 'responseSSML',      $ssml);
-    readingsBulkUpdate($hash, 'state',             'ok');
-    readingsBulkUpdate($hash, 'lastError',         '-');
+    readingsBulkUpdate($hash, 'lastCommand',              $lastCmd);
+    readingsBulkUpdate($hash, 'lastCommandResult',        'ok');
+    readingsBulkUpdate($hash, 'response',                 $summary);
+    readingsBulkUpdate($hash, 'responsePlain',            $plain);
+    readingsBulkUpdate($hash, 'responseHTML',             $html);
+    readingsBulkUpdate($hash, 'responseSSML',             $ssml);
+    readingsBulkUpdate($hash, 'state',                    'ok');
+    readingsBulkUpdate($hash, 'lastError',                '-');
+    readingsBulkUpdate($hash, 'lastRequestType',          'control');
+    readingsBulkUpdate($hash, 'lastRequestWasLocal',      '1');
+    readingsBulkUpdate($hash, 'lastApiCallUsedTools',     '0');
+    readingsBulkUpdate($hash, 'toolUseCount',             '0');
+    readingsBulkUpdate($hash, 'toolSetDeviceCount',       '0');
+    readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  '0');
+    readingsBulkUpdate($hash, 'stopReason',               'local');
+    readingsBulkUpdate($hash, 'stopSequence',             '-');
+    readingsBulkUpdate($hash, 'stopDetails',              '-');
+    readingsBulkUpdate($hash, 'responseId',               '-');
+    readingsBulkUpdate($hash, 'responseType',             'local');
+    readingsBulkUpdate($hash, 'responseRole',             'assistant');
+    readingsBulkUpdate($hash, 'serviceTier',              '-');
+    readingsBulkUpdate($hash, 'inferenceGeo',             '-');
+    if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'cacheCreationInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheReadInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-');
+    }
     readingsEndUpdate($hash, 1);
 
-    Log3 $name, 4, "Claude ($name): Referenzielle Folgeanweisung lokal auf Batch aufgeloest: command=$command devices=" . join(', ', @successfulDevices);
+    if (!$showAdvancedTokenReadings) {
+        Claude_ClearAdvancedTokenReadings($hash);
+    }
+
+    Log3 $name, 4, "Claude ($name): Referential follow-up instruction resolved locally to batch: command=$setSuffix devices=" . join(', ', @successfulDevices);
     return 1;
 }
 
 ##############################################################################
-# Control-Funktion: Geraet steuern via Claude Tool Use
+# Control function: control device via Claude Tool Use
 ##############################################################################
 sub Claude_SendControl {
     my ($hash, $instruction, $extraContext) = @_;
@@ -2914,9 +3593,9 @@ sub Claude_SendControl {
 
     my $apiKey = AttrVal($name, 'apiKey', '');
     if (!$apiKey) {
-        readingsSingleUpdate($hash, 'lastError', 'Kein API Key gesetzt (attr apiKey)', 1);
+        readingsSingleUpdate($hash, 'lastError', 'No API key set (attr apiKey)', 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): Kein API Key konfiguriert!";
+        Log3 $name, 1, "Claude ($name): No API key configured!";
         return;
     }
 
@@ -2925,16 +3604,27 @@ sub Claude_SendControl {
     my $maxHistory = int(AttrVal($name, 'maxHistory', 10));
     my $effectiveHistory = $maxHistory < 6 ? 6 : $maxHistory;
     my $maxTokens  = int(AttrVal($name, 'maxTokens',  300));
+    my $cacheControl = Claude_GetPromptCacheControl($hash);
 
-    Log3 $name, 4, "Claude ($name): Verwende Modell $model";
+    readingsBeginUpdate($hash);
+    readingsBulkUpdate($hash, 'lastRequestType',      'control');
+    readingsBulkUpdate($hash, 'lastRequestModel',     $model);
+    readingsBulkUpdate($hash, 'lastRequestWasLocal',  '0');
+    readingsBulkUpdate($hash, 'lastApiCallUsedTools', '1');
+    readingsBulkUpdate($hash, 'toolUseCount',         '0');
+    readingsBulkUpdate($hash, 'toolSetDeviceCount',   '0');
+    readingsBulkUpdate($hash, 'toolGetDeviceStateCount', '0');
+    readingsEndUpdate($hash, 1);
 
-    # Startindex merken, damit bei Fehlern die gesamte Control-Session
-    # sauber aus dem Verlauf entfernt werden kann
+    Log3 $name, 4, "Claude ($name): Using model $model";
+
+    # Remember the start index so the entire control session
+    # can be cleanly removed from history on errors
     $hash->{CONTROL_START_IDX} = scalar(@{$hash->{CHAT}});
     $hash->{CONTROL_SUCCESSFUL_DEVICES}  = [];
     $hash->{CONTROL_SUCCESSFUL_COMMANDS} = [];
     $instruction = Claude_ExpandReferentialInstruction($hash, $instruction);
-    Log3 $name, 4, "Claude ($name): Expandierte Folgeanweisung von '$originalInstruction' zu '$instruction'" if $instruction ne $originalInstruction;
+    Log3 $name, 4, "Claude ($name): Expanded follow-up instruction from '$originalInstruction' to '$instruction'" if $instruction ne $originalInstruction;
 
     $hash->{LAST_CONTROL_INSTRUCTION} = $originalInstruction;
 
@@ -2956,7 +3646,7 @@ sub Claude_SendControl {
         : Claude_SanitizeMessagesForApi($hash->{CHAT}, $name);
 
     if (!$messagesToSend || ref($messagesToSend) ne 'ARRAY' || !@$messagesToSend) {
-        my $errMsg = 'Interner Fehler: Keine gueltigen messages fuer Control-Anfrage erzeugt';
+        my $errMsg = 'Internal error: no valid messages generated for control request';
         readingsSingleUpdate($hash, 'lastError', $errMsg, 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
         Log3 $name, 1, "Claude ($name): $errMsg; CHAT=" . Claude_DebugMessageSummary($hash->{CHAT});
@@ -2966,12 +3656,13 @@ sub Claude_SendControl {
     Log3 $name, 4, "Claude ($name): Control messages " . Claude_DebugMessageSummary($messagesToSend);
 
     my $fullSystem = Claude_BuildControlSystemPrompt($hash, include_control_context => 1);
+    my $systemBlocks = Claude_BuildSystemBlocks($fullSystem, cache_control => $cacheControl);
 
     Log3 $name, 4, "Claude ($name): Effective control history=$effectiveHistory" if $effectiveHistory != $maxHistory;
 
-    # Control-Request an Claude:
-    # zusaetzlich zu den Nachrichten werden hier die verfuegbaren Tools
-    # fuer set_device und get_device_state mitgeschickt
+    # Control request to Claude:
+    # in addition to the messages, the available tools
+    # for set_device and get_device_state are included here
     my %requestBody = (
         model      => $model,
         max_tokens => $maxTokens,
@@ -2979,19 +3670,17 @@ sub Claude_SendControl {
         tools      => Claude_GetControlTools()
     );
 
-    $requestBody{system} = $fullSystem if $fullSystem ne '';
-    $requestBody{cache_control} = { type => 'ephemeral' } if AttrVal($name, 'promptCaching', 0);
+    $requestBody{system} = $systemBlocks if $systemBlocks;
 
     my $jsonBody = eval { encode_json(\%requestBody) };
     if ($@) {
-        readingsSingleUpdate($hash, 'lastError', "JSON Encode Fehler: $@", 1);
+        readingsSingleUpdate($hash, 'lastError', "JSON encode error: $@", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        pop @{$hash->{CHAT}};
-        delete $hash->{CONTROL_START_IDX};
+        Claude_RollbackControlSession($hash);
         return;
     }
 
-    Log3 $name, 4, "Claude ($name): Control-Anfrage " . $jsonBody;
+    Log3 $name, 4, "Claude ($name): Control request " . $jsonBody;
 
     readingsSingleUpdate($hash, 'state', 'requesting...', 1);
 
@@ -3009,7 +3698,7 @@ sub Claude_SendControl {
 }
 
 ##############################################################################
-# Callback: Antwort auf Control-Anfrage / Tool-Result verarbeiten
+# Callback: process response to control request / tool result
 ##############################################################################
 sub Claude_HandleControlResponse {
     my ($param, $err, $data) = @_;
@@ -3017,45 +3706,60 @@ sub Claude_HandleControlResponse {
     my $name = $hash->{NAME};
 
     if ($err) {
-        readingsSingleUpdate($hash, 'lastError', "HTTP Fehler: $err", 1);
+        readingsSingleUpdate($hash, 'lastError', "HTTP error: $err", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): HTTP Fehler: $err";
+        Log3 $name, 1, "Claude ($name): HTTP error: $err";
         Claude_RollbackControlSession($hash);
         return;
     }
 
-    utf8::downgrade($data, 1);
-
-    Log3 $name, 5, "Claude ($name): Antwort raw: $data";
+    Log3 $name, 5, "Claude ($name): Raw response: $data";
 
     my $result = eval { decode_json($data) };
     if ($@) {
-        readingsSingleUpdate($hash, 'lastError', "JSON Parse Fehler: $@", 1);
+        readingsSingleUpdate($hash, 'lastError', "JSON parse error: $@", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): JSON Parse Fehler: $@";
+        Log3 $name, 1, "Claude ($name): JSON parse error: $@";
         Claude_RollbackControlSession($hash);
         return;
     }
 
-    if (exists $result->{usage}) {
-        my $inputTokens  = $result->{usage}{input_tokens};
-        my $outputTokens = $result->{usage}{output_tokens};
-        my $totalTokens  = (defined $inputTokens ? $inputTokens : 0) + (defined $outputTokens ? $outputTokens : 0);
-        readingsSingleUpdate($hash, 'promptTokenCount',     defined $inputTokens  ? $inputTokens  : '-', 1);
-        readingsSingleUpdate($hash, 'candidatesTokenCount', defined $outputTokens ? $outputTokens : '-', 1);
-        readingsSingleUpdate($hash, 'totalTokenCount',      $totalTokens, 1);
+    my $toolUseCount = 0;
+    my $toolSetCount = 0;
+    my $toolGetCount = 0;
+    if (ref($result->{content}) eq 'ARRAY') {
+        for my $part (@{$result->{content}}) {
+            next unless ref($part) eq 'HASH';
+            next unless ($part->{type} // '') eq 'tool_use';
+            $toolUseCount++;
+            my $toolName = $part->{name} // '';
+            $toolSetCount++ if $toolName eq 'set_device';
+            $toolGetCount++ if $toolName eq 'get_device_state';
+        }
     }
 
+    Claude_UpdateResponseMetadataReadings(
+        $hash,
+        $result,
+        request_type   => ReadingsVal($name, 'lastRequestType', 'control'),
+        request_model  => ReadingsVal($name, 'lastRequestModel', AttrVal($name, 'model', 'claude-haiku-4-5')),
+        was_local      => 0,
+        used_tools     => 1,
+        tool_use_count => $toolUseCount,
+        tool_set_count => $toolSetCount,
+        tool_get_count => $toolGetCount
+    );
+
     if (exists $result->{model}) {
-        Log3 $name, 4, "Claude ($name): API meldet Modell " . $result->{model};
+        Log3 $name, 4, "Claude ($name): API reports model " . $result->{model};
     }
 
     if (exists $result->{error}) {
         my $errType = $result->{error}{type}    // 'unknown_error';
-        my $errMsg  = $result->{error}{message} // 'Unbekannter API Fehler';
-        readingsSingleUpdate($hash, 'lastError', "API Fehler ($errType): $errMsg", 1);
+        my $errMsg  = $result->{error}{message} // 'Unknown API error';
+        readingsSingleUpdate($hash, 'lastError', "API error ($errType): $errMsg", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 1, "Claude ($name): API Fehler ($errType): $errMsg";
+        Log3 $name, 1, "Claude ($name): API error ($errType): $errMsg";
         Claude_RollbackControlSession($hash);
         return;
     }
@@ -3077,14 +3781,14 @@ sub Claude_HandleControlResponse {
         my $input    = $part->{input} // {};
         my $inputJson = eval { encode_json($input) };
         $inputJson = '{json_encode_error}' if $@;
-        Log3 $name, 4, "Claude ($name): ToolUse empfangen: name=$toolName id=$toolId input=$inputJson";
+        Log3 $name, 4, "Claude ($name): ToolUse received: name=$toolName id=$toolId input=$inputJson";
 
         if ($toolName eq 'set_device') {
             my $device  = $input->{device}  // '';
             my $command = $input->{command} // '';
 
             if (!$device) {
-                my $errMsg = "Fehler: Tool set_device ohne device";
+                my $errMsg = "Error: tool set_device without device";
                 Log3 $name, 2, "Claude ($name): $errMsg";
                 push @toolResults, {
                     type        => 'tool_result',
@@ -3095,7 +3799,7 @@ sub Claude_HandleControlResponse {
             }
 
             if (!$command) {
-                my $errMsg = "Fehler: Tool set_device ohne command";
+                my $errMsg = "Error: tool set_device without command";
                 Log3 $name, 2, "Claude ($name): $errMsg";
                 push @toolResults, {
                     type        => 'tool_result',
@@ -3106,7 +3810,7 @@ sub Claude_HandleControlResponse {
             }
 
             if ($command =~ /[;|`\$\(\)<>\n]/) {
-                my $errMsg = "Fehler: Ungueltiger Befehl '$command' (unerlaubte Zeichen)";
+                my $errMsg = "Error: invalid command '$command' (forbidden characters)";
                 Log3 $name, 2, "Claude ($name): $errMsg";
                 push @toolResults, {
                     type        => 'tool_result',
@@ -3122,7 +3826,7 @@ sub Claude_HandleControlResponse {
                 my ($toolCommandName) = split(/\s+/, $command, 2);
 
                 if (!defined $toolCommandName || $toolCommandName eq '' || !Claude_DeviceSupportsCommand($device, $toolCommandName)) {
-                    my $errMsg = "Fehler: Befehl '$command' fuer Geraet '$device' nicht verfuegbar";
+                    my $errMsg = "Error: command '$command' not available for device '$device'";
 
                     my $cmdForReading = "$device $command";
                     utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
@@ -3145,7 +3849,7 @@ sub Claude_HandleControlResponse {
 
                 my ($toolValue) = $command =~ /^\S+\s+(.+)$/;
                 if (defined $toolValue && $toolValue ne '' && !Claude_DeviceSupportsValueForCommand($device, $toolCommandName, $toolValue)) {
-                    my $errMsg = "Fehler: Wert '$toolValue' fuer Befehl '$toolCommandName' bei Geraet '$device' nicht verfuegbar";
+                    my $errMsg = "Error: value '$toolValue' not available for command '$toolCommandName' on device '$device'";
 
                     my $cmdForReading = "$device $command";
                     utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
@@ -3189,7 +3893,7 @@ sub Claude_HandleControlResponse {
                     content     => ($setResult eq 'ok' ? "OK: $device $command ausgefuehrt" : "Fehler: $setResult")
                 };
             } else {
-                my $errMsg = "Fehler: Geraet '$device' nicht in controlList oder nicht vorhanden";
+                my $errMsg = "Error: device '$device' not in controlList or does not exist";
 
                 my $cmdForReading = "$device $command";
                 utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
@@ -3212,10 +3916,13 @@ sub Claude_HandleControlResponse {
         } elsif ($toolName eq 'get_device_state') {
             my $device = $input->{device} // '';
             my $stateResult;
+            my %allowed = map { $_ => 1 } Claude_GetControlDevices($hash);
 
             if (!$device) {
-                $stateResult = "Fehler: Tool get_device_state ohne device";
-            } elsif (exists $main::defs{$device}) {
+                $stateResult = "Error: tool get_device_state without device";
+            } elsif (!$allowed{$device} || !exists $main::defs{$device}) {
+                $stateResult = "Error: device '$device' not in controlList or does not exist";
+            } else {
                 my $dev = $main::defs{$device};
                 my $traits = Claude_GetDeviceTraits($device);
 
@@ -3249,8 +3956,6 @@ sub Claude_HandleControlResponse {
                         $stateResult .= join("\n", @compactReadings) . "\n";
                     }
                 }
-            } else {
-                $stateResult = "Fehler: Geraet '$device' nicht gefunden";
             }
 
             push @toolResults, {
@@ -3263,7 +3968,7 @@ sub Claude_HandleControlResponse {
             push @toolResults, {
                 type        => 'tool_result',
                 tool_use_id => $toolId,
-                content     => "Fehler: Unbekanntes Tool '$toolName'"
+                content     => "Error: unknown tool '$toolName'"
             };
         }
     }
@@ -3279,7 +3984,7 @@ sub Claude_HandleControlResponse {
             my %seen;
             @$sessionDevices = grep { defined $_ && $_ ne '' && !$seen{$_}++ } @$sessionDevices;
 
-            Log3 $name, 4, "Claude ($name): Sammle erfolgreiche Geraete fuer laufende Control-Session: " . join(', ', @$sessionDevices);
+            Log3 $name, 4, "Claude ($name): Collecting successful devices for the current control session: " . join(', ', @$sessionDevices);
         }
 
         push @{$hash->{CHAT}}, {
@@ -3299,9 +4004,9 @@ sub Claude_HandleControlResponse {
 
     if (!$responseUnicode) {
         my $stopReason = $result->{stop_reason} // 'UNKNOWN';
-        readingsSingleUpdate($hash, 'lastError', "Leere Antwort, stop_reason: $stopReason", 1);
+        readingsSingleUpdate($hash, 'lastError', "Empty response, stop_reason: $stopReason", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
-        Log3 $name, 2, "Claude ($name): Leere Control-Antwort, stop_reason: $stopReason";
+        Log3 $name, 2, "Claude ($name): Empty control response, stop_reason: $stopReason";
         Claude_RollbackControlSession($hash);
         return;
     }
@@ -3337,12 +4042,12 @@ sub Claude_HandleControlResponse {
     readingsBulkUpdate($hash, 'lastError',     '-');
     readingsEndUpdate($hash, 1);
 
-    Log3 $name, 4, "Claude ($name): Control-Antwort erhalten (" . length($responseUnicode) . " Zeichen)";
+    Log3 $name, 4, "Claude ($name): Control response received (" . length($responseUnicode) . " characters)";
     return undef;
 }
 
 ##############################################################################
-# Hilfsfunktion: Tool-Results gesammelt an Claude zurueckschicken
+# Helper function: send tool results back to Claude collectively
 ##############################################################################
 sub Claude_SendToolResults {
     my ($hash, $toolResults) = @_;
@@ -3359,20 +4064,33 @@ sub Claude_SendToolResults {
     my $model     = AttrVal($name, 'model',     'claude-haiku-4-5');
     my $timeout   = AttrVal($name, 'timeout',   30);
     my $maxTokens = int(AttrVal($name, 'maxTokens', 300));
+    my $cacheControl = Claude_GetPromptCacheControl($hash);
 
-    Log3 $name, 4, "Claude ($name): Verwende Modell $model";
+    Log3 $name, 4, "Claude ($name): Using model $model";
 
     my $disableHistory = AttrVal($name, 'disableHistory', 0);
     my $messagesToSend;
     if ($disableHistory) {
-        my $startIdx = $hash->{CONTROL_START_IDX} // 0;
-        $messagesToSend = [ @{$hash->{CHAT}}[$startIdx..$#{$hash->{CHAT}}] ];
+        my $chat = $hash->{CHAT};
+        my $chatCount = ($chat && ref($chat) eq 'ARRAY') ? scalar(@$chat) : 0;
+        my $startIdx = $hash->{CONTROL_START_IDX};
+
+        if (!$chatCount) {
+            $messagesToSend = [];
+        } else {
+            $startIdx = 0 unless defined $startIdx;
+            $startIdx = 0 if $startIdx < 0;
+            $startIdx = $chatCount if $startIdx > $chatCount;
+
+            my @slice = $startIdx < $chatCount ? @{$chat}[$startIdx .. $chatCount - 1] : ();
+            $messagesToSend = Claude_SanitizeMessagesForApi(\@slice, $name);
+        }
     } else {
         $messagesToSend = Claude_SanitizeMessagesForApi($hash->{CHAT}, $name);
     }
 
     if (!$messagesToSend || ref($messagesToSend) ne 'ARRAY' || !@$messagesToSend) {
-        my $errMsg = 'Interner Fehler: Keine gueltigen messages fuer ToolResults erzeugt';
+        my $errMsg = 'Internal error: no valid messages generated for tool results';
         readingsSingleUpdate($hash, 'lastError', $errMsg, 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
         Log3 $name, 1, "Claude ($name): $errMsg; CHAT=" . Claude_DebugMessageSummary($hash->{CHAT});
@@ -3382,6 +4100,7 @@ sub Claude_SendToolResults {
     Log3 $name, 4, "Claude ($name): ToolResult messages " . Claude_DebugMessageSummary($messagesToSend);
 
     my $fullSystem = Claude_BuildControlSystemPrompt($hash, include_control_context => 0);
+    my $systemBlocks = Claude_BuildSystemBlocks($fullSystem, cache_control => $cacheControl);
 
     my %requestBody = (
         model      => $model,
@@ -3390,12 +4109,11 @@ sub Claude_SendToolResults {
         tools      => Claude_GetControlTools()
     );
 
-    $requestBody{system} = $fullSystem if $fullSystem ne '';
-    $requestBody{cache_control} = { type => 'ephemeral' } if AttrVal($name, 'promptCaching', 0);
+    $requestBody{system} = $systemBlocks if $systemBlocks;
 
     my $jsonBody = eval { encode_json(\%requestBody) };
     if ($@) {
-        readingsSingleUpdate($hash, 'lastError', "JSON Encode Fehler: $@", 1);
+        readingsSingleUpdate($hash, 'lastError', "JSON encode error: $@", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
         Claude_RollbackControlSession($hash);
         return;
@@ -3403,8 +4121,8 @@ sub Claude_SendToolResults {
 
     my @toolIds = map { $_->{tool_use_id} // '?' } @$toolResults;
     my @toolContents = map { ($_->{tool_use_id} // '?') . '=' . ($_->{content} // '') } @$toolResults;
-    Log3 $name, 4, "Claude ($name): ToolResults fuer '" . join("', '", @toolIds) . "' gesendet";
-    Log3 $name, 4, "Claude ($name): ToolResult Inhalte: " . join(' || ', @toolContents);
+    Log3 $name, 4, "Claude ($name): ToolResults sent for '" . join("', '", @toolIds) . "'";
+    Log3 $name, 4, "Claude ($name): ToolResult contents: " . join(' || ', @toolContents);
     Log3 $name, 4, "Claude ($name): ToolResult Request " . $jsonBody;
 
     HttpUtils_NonblockingGet({
@@ -3423,156 +4141,608 @@ sub Claude_SendToolResults {
 1;
 
 =pod
-=item device
-=item summary Anthropic Claude AI integration for FHEM
-=item summary_DE Anthropic Claude KI Anbindung fuer FHEM
+=item summary    Anthropic Claude AI assistant
+=item summary_DE Anthropic Claude KI Assistent
 
 =begin html
 
-<a name="Claude"></a>
+<a id="Claude"></a>
 <h3>Claude</h3>
 <ul>
-  FHEM Modul zur Anbindung der Anthropic Claude API.<br><br>
+  Intelligent smart home control assistant powered by Anthropic Claude AI.
+  <br><br>
 
-  <b>Define</b><br>
-  <ul><code>define <name> Claude</code></ul><br>
-
-  <b>Attribute</b><br>
-  <ul>
-    <li><b>apiKey</b> - Anthropic API Key (Pflicht)</li>
-    <li><b>model</b> - Claude Modell (Standard: claude-haiku-4-5).
-      <code>claude-haiku-4-5</code> ist aktuell das kostenguenstigste
-      verfuegbare Claude-Modell und fuer viele typische FHEM-Anwendungen
-      eine gute Standardwahl.</li>
-    <li><b>maxHistory</b> - Max. Chat-Nachrichten (Standard: 10). Ein kleinerer Wert
-      haelt den mitgesendeten Verlauf kompakter, weil weniger fruehere Nachrichten
-      erneut an Claude gesendet werden.</li>
-    <li><b>maxTokens</b> - Maximale Antwortlaenge. Wenn das Attribut nicht gesetzt ist,
-      verwendet das Modul je nach Anfrageart unterschiedliche Fallback-Werte:
-      <code>600</code> fuer normale Anfragen wie <b>ask</b> oder <b>askAboutDevices</b>
-      sowie <code>300</code> fuer <b>control</b> bzw. Tool Use. Wenn das Attribut
-      gesetzt ist, ueberschreibt dieser Wert die jeweiligen Fallbacks. Ein kleinerer
-      Wert haelt Antworten kompakter und begrenzt den zu erwartenden Tokenverbrauch,
-      kann Antworten aber kuerzer ausfallen lassen.</li>
-    <li><b>systemPrompt</b> - Optionaler System-Prompt. Je laenger der Prompt ist,
-      desto groesser wird der mitgesendete Kontext pro Anfrage.</li>
-    <li><b>timeout</b> - HTTP Timeout in Sekunden (Standard: 30)</li>
-    <li><b>disable</b> - Modul deaktivieren</li>
-    <li><b>disableHistory</b> - Chat-Verlauf deaktivieren (0/1). Bei 1 wird jede Anfrage
-      ohne vorherigen Chat-Verlauf gesendet und als eigenstaendiges Gespraech behandelt.
-      Der interne Verlauf bleibt erhalten (fuer resetChat), wird aber nicht an die API uebermittelt.
-      Das kann bei vielen Anwendungsfaellen Tokens sparen, reduziert aber den
-      Gespraechskontext.</li>
-    <li><b>promptCaching</b> - Aktiviert Prompt-Caching in der Claude API (0/1).
-      Das ist besonders sinnvoll bei wiederkehrenden Prompts, Geraetekontexten oder
-      aehnlichen Anfragen und kann den laufenden Verbrauch reduzieren.</li>
-    <li><b>deviceContextMode</b> - Steuert, wie viele Geraeteinformationen bei
-      <b>askAboutDevices</b> an Claude gesendet werden.<br>
-      <code>compact</code>: sendet pro Geraet nur den Alias, den aktuellen Status
-      und bis zu 3 wichtige Readings. Das ist fuer viele typische
-      Zusammenfassungen bereits gut ausreichend und haelt den Kontext klein.<br>
-      <code>detailed</code>: sendet zusaetzlich den internen Geraetenamen, den Typ
-      sowie weitere Attribute wie <code>room</code>, <code>group</code> und
-      <code>alias</code>. Das ist ausfuehrlicher und kann bei komplexeren
-      Rueckfragen hilfreich sein.</li>
-    <li><b>controlContextMode</b> - Steuert, wie viele Informationen fuer den
-      <b>control</b>-Befehl an Claude gesendet werden.<br>
-      <code>compact</code>: sendet pro Geraet nur Alias, internen Namen und
-      aktuellen Status. Das reicht fuer viele einfache Schaltbefehle bereits
-      gut aus und haelt den Kontext klein.<br>
-      <code>detailed</code>: sendet zusaetzlich eine kompakte Liste typischer
-      verfuegbarer Befehle mit. Das hilft Claude bei komplexeren
-      Steueranweisungen und kann die Aufloesung freierer Formulierungen
-      erleichtern.</li>
-    <li><b>localControlResolver</b> - Aktiviert den lokalen Resolver fuer den
-      Claude-Hybridbetrieb bei <b>control</b>-Befehlen (0/1, Standard: 1).<br>
-      Bei <code>1</code> arbeitet das Modul hybrid: viele einfache und
-      eindeutige Steuerbefehle werden direkt in FHEM ausgefuehrt. Dafuer ist in
-      diesen Faellen kein zusaetzlicher Claude-API-Aufruf noetig. Das spart im
-      Alltag Tokens und damit laufende Kosten, sodass die Nutzung von Claude in
-      FHEM fuer typische Steueraufgaben in der Praxis meist gut bezahlbar
-      bleibt.<br>
-      Komplexe, mehrdeutige oder frei formulierte Anweisungen laufen weiterhin
-      automatisch ueber Claude. Bei <code>0</code> wird jeder
-      <b>control</b>-Befehl vollstaendig ueber Claude verarbeitet.<br>
-      Der lokale Resolver arbeitet bewusst konservativ und uebernimmt nur
-      Befehle, die sicher und eindeutig aufloesbar sind. Freiere oder
-      mehrdeutige Formulierungen bleiben deshalb beim Claude-Fallback.</li>
-    <li><b>readingBlacklist</b> - Leerzeichen-getrennte Liste von
-      Reading- oder Befehlsnamen, die nicht an Claude uebermittelt werden.
-      Wildcards mit <code>*</code> werden unterstuetzt, z. B.
-      <code>R-*</code> oder <code>Wifi_*</code>. Die Blacklist wird auf
-      Device-Kontext, Control-Kontext und das Tool
-      <code>get_device_state</code> angewendet. Zusaetzlich gibt es eine
-      interne Standard-Blacklist fuer technisch wenig hilfreiche Eintraege.</li>
-    <li><b><Instanzname>Instructions</b> - Optionales Attribut an beliebigen
-      FHEM-Geraeten, z. B. <code>ClaudeAIInstructions</code>. Damit lassen sich
-      geraetespezifische Anweisungen nur fuer diese Claude-Instanz hinterlegen.
-      Das Attribut wird zusaetzlich zum allgemeinen <code>comment</code> in
-      den Device- und Control-Kontext uebernommen.</li>
-    <li><b>deviceList</b> - Komma-getrennte Geraeteliste fuer askAboutDevices</li>
-    <li><b>deviceRoom</b> - Komma-getrennte Raumliste; alle Geraete mit passendem
-      FHEM-room-Attribut werden automatisch fuer askAboutDevices verwendet.
-      Beispiel: <code>attr ClaudeAI deviceRoom Wohnzimmer,Kueche</code>.
-      Kann zusammen mit <b>deviceList</b> verwendet werden.</li>
-    <li><b>controlList</b> - Komma-getrennte Liste der Geraete, die Claude per
-      Tool Use steuern darf. Kann zusammen mit <b>controlRoom</b> verwendet
-      werden. Alias-Namen und verfuegbare set-Befehle der Geraete werden
-      automatisch an Claude uebermittelt, sodass Sprachbefehle mit
-      Alias-Namen und passende Befehle automatisch erkannt werden. Eine
-      kompakte und sinnvoll begrenzte Liste haelt den gesendeten Kontext
-      ueberschaubar. Beispiel:
-      <code>attr ClaudeAI controlList Lampe1,Heizung,Rolladen1</code></li>
-    <li><b>controlRoom</b> - Komma-getrennte Raumliste; Geraete mit passendem
-      <code>room</code>-Attribut werden automatisch als steuerbar eingestuft.
-      Kann zusammen mit <b>controlList</b> verwendet werden. Beispiel:
-      <code>attr ClaudeAI controlRoom Wohnzimmer,Kueche</code></li>
-  </ul><br>
-
-  <b>Set</b><br>
-  <ul>
-    <li><b>ask</b> <Frage> - Textfrage stellen</li>
-    <li><b>askWithImage</b> <Bildpfad> <Frage> - Bild + Frage senden</li>
-    <li><b>askAboutDevices</b> [<Frage>] - Geraete-Status an Claude uebergeben und Frage stellen</li>
-    <li><b>chat</b> <Nachricht> - Universeller Befehl fuer allgemeine Fragen,
-      Geraete-Status und Steuerung in einem. Wenn steuerbare Geraete per
-      <b>controlList</b> und/oder <b>controlRoom</b> konfiguriert sind, wird die
-      Nachricht ueber die Control-Logik verarbeitet; andernfalls als normale
-      Anfrage mit optionalem Geraetekontext. Besonders praktisch fuer
-      Telegram- oder Notify-Integrationen.</li>
-    <li><b>control</b> <Anweisung> - Steuert FHEM-Geraete per Sprachbefehl.
-      Im Standard arbeitet das Modul im Claude-Hybridbetrieb (Lokalmodus):
-      viele einfache Standardbefehle werden direkt lokal in FHEM ausgefuehrt,
-      waehrend Claude komplexere oder freier formulierte Anweisungen
-      uebernimmt. Dadurch sind typische Schaltvorgaenge oft ohne zusaetzlichen
-      API-Aufruf moeglich, was im Alltag Tokens und damit Kosten sparen kann.
-      Beispiel: <code>set ClaudeAI control Mach die Wohnzimmerlampe an</code>.
-      Gesteuert werden duerfen nur Geraete aus <b>controlList</b> und/oder den
-      ueber <b>controlRoom</b> einbezogenen Raeumen.</li>
-    <li><b>resetChat</b> - Chat-Verlauf loeschen</li>
-  </ul><br>
-
-  <b>Get</b><br>
-  <ul>
-    <li><b>chatHistory</b> - Chat-Verlauf anzeigen</li>
-  </ul><br>
-
-  <b>Readings</b><br>
-  <ul>
-    <li><b>response</b> - Letzte Textantwort von Claude (Roh-Markdown)</li>
-    <li><b>responsePlain</b> - Letzte Textantwort, Markdown-Syntax entfernt (reiner Text, ideal fuer Sprachausgabe, Telegram, Notify)</li>
-    <li><b>responseHTML</b> - Letzte Textantwort, Markdown in HTML konvertiert (ideal fuer Tablet-UI, Web-Frontends)</li>
-    <li><b>responseSSML</b> - Letzte Textantwort, fuer Sprachausgabe bereinigt und als SSML aufbereitet</li>
-    <li><b>state</b> - Aktueller Status</li>
-    <li><b>lastError</b> - Letzter Fehler</li>
-    <li><b>chatHistory</b> - Anzahl der Nachrichten im Chat-Verlauf</li>
-    <li><b>lastCommand</b> - Letzter ausgefuehrter set-Befehl (z.B. <code>Lampe1 on</code>)</li>
-    <li><b>lastCommandResult</b> - Ergebnis des letzten set-Befehls (<code>ok</code> oder Fehlermeldung)</li>
-    <li><b>candidatesTokenCount</b> - Anzahl der von Claude generierten Tokens (Antwort)</li>
-    <li><b>promptTokenCount</b> - Anzahl der an Claude gesendeten Tokens (Input)</li>
-    <li><b>totalTokenCount</b> - Gesamtsumme der verbrauchten Tokens (Input + Output)</li>
-  </ul><br>
+  Project documentation, examples, and current notes:
+  <a href="https://github.com/TheRealWolfpunk/FHEM-Claude" target="_blank">GitHub project page &quot;FHEM-Claude&quot;</a>
 </ul>
 
 =end html
+
+=begin html_DE
+
+<a id="Claude"></a>
+<h3>Claude</h3>
+<ul>
+  Intelligente Smarthome Kontrolle mit Hilfe des Anthropic Claude KI Assistenten.
+  <br><br>
+
+  Projektdokumentation, Beispiele und aktuelle Hinweise:
+  <a href="https://github.com/TheRealWolfpunk/FHEM-Claude" target="_blank">GitHub Projektseite &quot;FHEM-Claude&quot;</a>
+</ul>
+
+=end html_DE
+
+=begin html
+
+<a id="Claude-define"></a>
+<b>Define</b>
+<ul>
+  <code>define &lt;name&gt; Claude</code>
+  <br><br>
+  Creates the Claude AI assistant device in FHEM.
+</ul><br>
+
+=end html
+
+=begin html_DE
+
+<a id="Claude-define"></a>
+<b>Define</b>
+<ul>
+  <code>define &lt;name&gt; Claude</code>
+  <br><br>
+  Legt den Claude KI Assistenten in FHEM an.
+</ul><br>
+
+=end html_DE
+
+=begin html
+
+<a id="Claude-set"></a>
+<b>Set</b>
+<ul>
+  <li>ask &lt;question&gt;<br>
+    Asks the assistant a text question.</li><br>
+
+  <li>askWithImage &lt;imagePath&gt; &lt;question&gt;<br>
+    Sends an image together with a question to the assistant.</li><br>
+
+  <li>askAboutDevices [&lt;question&gt;]<br>
+    Asks the assistant device-specific questions.</li><br>
+
+  <li>chat &lt;message&gt;<br>
+    Universal command for general questions, device status, and control in one.<br>
+    If controllable devices are configured via controlList and/or controlRoom, the message is processed through the control logic. Otherwise, it is handled as a normal request with optional device context.<br>
+    Especially useful for Telegram or notify integrations.</li><br>
+
+  <li>control &lt;instruction&gt;<br>
+    Controls FHEM devices via natural-language command.<br>
+    By default, the module runs in Claude hybrid mode (local mode): many simple standard commands are executed directly in FHEM, while Claude handles more complex or more freely phrased instructions.
+    This allows typical switching actions to work without an additional API call, which can save tokens and therefore costs in everyday use.
+    Only devices from controlList and/or rooms included through controlRoom may be controlled.
+    Example: set ClaudeAI control Turn on the living room lamp.</li><br>
+
+  <li>resetChat<br>
+    Clears the chat history.</li>
+</ul><br>
+
+=end html
+
+=begin html_DE
+
+<a id="Claude-set"></a>
+<b>Set</b>
+<ul>
+  <li>ask <Frage><br>
+    Stellt eine Textfrage an den Assistenten.</li><br>
+
+  <li>askWithImage &lt;Bildpfad&gt; &lt;Frage&gt;<br>
+    Sendet ein Bild und eine Frage dazu an den Assistenten.</li><br>
+      
+  <li>askAboutDevices [&lt;Frage&gt;]<br>
+    Stellt dem Assistenten gerätespezifische Fragen.</li><br>
+
+  <li>chat &lt;Nachricht&gt;<br>
+    Universeller Befehl für allgemeine Fragen, Geräte-Status und Steuerung in einem.<br>
+    Wenn steuerbare Geräte per controlList und/oder controlRoom konfiguriert sind, wird die Nachricht über die Control-Logik verarbeitet. Andernfalls als normale Anfrage mit optionalem Gerätekontext.<br>
+    Besonders praktisch für Telegram- oder Notify-Integrationen.</li><br>
+
+  <li>control &lt;Anweisung&gt;<br>
+    Steuert FHEM-Geräte per Sprachbefehl.<br>
+    Im Standard arbeitet das Modul im Claude-Hybridbetrieb (Lokalmodus): Viele einfache Standardbefehle werden direkt lokal in FHEM ausgeführt, während Claude komplexere oder freier formulierte Anweisungen übernimmt.
+    Dadurch sind typische Schaltvorgänge oft ohne zusätzlichen API-Aufruf möglich, was im Alltag Tokens und damit Kosten sparen kann.
+    Gesteuert werden dürfen nur Geräte aus controlList und/oder den über controlRoom einbezogenen Räumen.
+    Beispiel: set ClaudeAI control Mach die Wohnzimmerlampe an.</li><br>
+
+  <li>resetChat<br>
+    Löscht den Chat-Verlauf.</li>
+</ul><br>
+
+=end html_DE
+
+=begin html
+
+<a id="Claude-get"></a>
+<b>Get</b>
+<ul>
+  <li>chatHistory<br>
+    Shows the chat history.</li>
+</ul><br>
+
+=end html
+
+=begin html_DE
+
+<a id="Claude-get"></a>
+<b>Get</b>
+<ul>
+  <li>chatHistory<br>
+    Zeigt den Chat-Verlauf an.</li>
+</ul><br>
+
+=end html_DE
+
+=begin html
+
+<a id="Claude-attr"></a>
+<b>Attributes</b>
+<ul>
+  <a id="Claude-attr-apiKey"></a>
+  <li>apiKey<br>
+    Sets the personal Anthropic API key.<br>
+    Without the key, no requests can be sent to Claude.</li><br>
+
+  <a id="Claude-attr-model"></a>
+  <li>model<br>
+    Claude model to use (default: claude-haiku-4-5).<br>
+    claude-haiku-4-5 is currently the most cost-effective available Claude model and a good default choice for many typical FHEM use cases.</li><br>
+
+  <a id="Claude-attr-timeout"></a>
+  <li>timeout<br>
+    HTTP timeout in seconds (default: 30)</li><br>
+
+  <li><a href="#disable">disable</a><br>
+    Disables the module.</li><br>
+
+  <a id="Claude-attr-systemPrompt"></a>
+  <li>systemPrompt<br>
+    Optional system prompt that is sent with every request.<br>
+    The longer the prompt, the larger the context sent with each request becomes.</li><br>
+
+  <a id="Claude-attr-maxHistory"></a>
+  <li>maxHistory<br>
+    Maximum number of stored chat messages (default: 10).<br>
+    A smaller value keeps the transmitted history more compact because fewer previous messages are resent to Claude.</li><br>
+
+  <a id="Claude-attr-maxTokens"></a>
+  <li>maxTokens<br>
+    Maximum response length.<br>
+    If the attribute is not set, the module uses different fallback values depending on the request type:
+    600 for normal requests such as ask or askAboutDevices, and 300 for control or Tool Use.
+    If the attribute is set, this value overrides the respective fallbacks.
+    A smaller value limits expected token usage, but responses may become shorter.</li><br>
+
+  <a id="Claude-attr-disableHistory"></a>
+  <li>disableHistory<br>
+    Disables chat history.<br>
+    When disabled, each request is sent without previous chat history and treated as a standalone conversation.
+    The internal history is still kept (for resetChat), but it is not transmitted to the API.
+    This can save tokens in many use cases, but reduces conversational context.</li><br>
+
+  <a id="Claude-attr-promptCaching"></a>
+  <li>promptCaching<br>
+    Enables prompt caching in the Claude API.<br>
+    This is especially useful for recurring prompts, device contexts, or similar requests and can reduce ongoing usage.</li><br>
+
+  <a id="Claude-attr-showAdvancedTokenReadings"></a>
+  <li>showAdvancedTokenReadings<br>
+    Enables advanced token/cache readings.
+    When enabled, additional technical detail readings such as cache creation and cache read tokens are shown.
+    By default, these details are hidden.</li><br>
+
+  <a id="Claude-attr-deviceContextMode"></a>
+  <li>deviceContextMode [compact|detailed]<br>
+    Controls how much device information is sent to Claude for askAboutDevices.<br>
+    compact sends only the alias, the current status, and up to 3 important readings per device.
+    This is already sufficient for many typical summaries and keeps the context small.<br>
+    detailed additionally sends the internal device name, the type, and further attributes such as room, group, and alias.
+    This is more verbose and can help with more complex follow-up questions.</li><br>
+
+  <a id="Claude-attr-deviceList"></a>
+  <li>deviceList<br>
+    Comma-separated device list for askAboutDevices</li><br>
+
+  <a id="Claude-attr-deviceRoom"></a>
+  <li>deviceRoom<br>
+    Comma-separated room list<br>
+    All devices with a matching room attribute are automatically used for askAboutDevices.
+    Can be used together with deviceList.<br>
+    Example: attr ClaudeAI deviceRoom Wohnzimmer,Kueche.</li><br>
+
+  <a id="Claude-attr-controlContextMode"></a>
+  <li>controlContextMode [compact|detailed]<br>
+    Controls how much information is sent to Claude for the control command.<br>
+    compact sends only alias, internal name, and current status per device.
+    This is already sufficient for many simple switching commands and keeps the context small.<br>
+    detailed additionally sends a compact list of typical available commands.
+    This helps Claude with more complex control instructions and can improve the resolution of freer formulations.</li><br>
+
+  <a id="Claude-attr-localControlResolver"></a>
+  <li>localControlResolver<br>
+    Enables the local resolver for Claude hybrid mode on control commands.<br>
+    This feature is enabled by default.<br>
+    When enabled, the module works in hybrid mode: many simple and unambiguous control commands are executed directly in FHEM.
+    In these cases, no additional Claude API call is required.
+    This saves tokens and therefore ongoing costs in everyday use, making Claude in FHEM generally affordable for typical control tasks in practice.<br>
+    Complex, ambiguous, or freely phrased instructions continue to run automatically through Claude.
+    When disabled, every control command is processed fully through Claude.<br>
+    The local resolver is intentionally conservative and only handles commands that can be resolved safely and unambiguously.
+    Freer or more ambiguous formulations therefore remain on the Claude fallback path.</li><br>
+
+  <a id="Claude-attr-controlList"></a>
+  <li>controlList<br>
+    Comma-separated list of devices that Claude may control via Tool Use.<br>
+    Can be used together with controlRoom.
+    Alias names and available set commands of the devices are automatically transmitted to Claude, so voice commands using aliases and suitable commands can be recognized automatically.
+    A compact and sensibly limited list keeps the transmitted context manageable.<br>
+    Example: attr ClaudeAI controlList Lampe1,Heizung,Rolladen1</li><br>
+
+  <a id="Claude-attr-controlRoom"></a>
+  <li>controlRoom<br>
+    Comma-separated room list.<br>
+    Devices with a matching room attribute are automatically classified as controllable.
+    Can be used together with controlList.<br>
+    Example: attr ClaudeAI controlRoom Wohnzimmer,Kueche</li><br>
+
+  <a id="Claude-attr-readingBlacklist"></a>
+  <li>readingBlacklist<br>
+    Space-separated list of reading or command names that should not be transmitted to Claude.<br>
+    Wildcards with * are supported, e.g. R-* or Wifi*.
+    The blacklist is applied to device context, control context, and device state queries.</li><br>
+
+  <a id="Claude-attr-InstanznameInstructions"></a>
+  <li>&lt;InstanceName&gt;Instructions<br>
+    Optional attribute on any FHEM device.<br>
+    This allows storing device-specific instructions only for this Claude instance.
+    The attribute is included in device and control context in addition to the general comment.<br>
+    Example: if the name in the define (InstanceName) of the Claude module is &quot;ClaudeAI&quot;, the additional attribute ClaudeAIInstructions appears on FHEM devices.</li>
+</ul><br>
+
+=end html
+
+=begin html_DE
+
+<a id="Claude-attr"></a>
+<b>Attributes</b>
+<ul>
+  <a id="Claude-attr-apiKey"></a>
+  <li>apiKey<br>
+    Setzt den persönlichen Anthropic API Key.<br>
+    Ohne den Key können keine Anfragen an Claude gesendet werden.</li><br>
+
+  <a id="Claude-attr-model"></a>
+  <li>model<br>
+    Zu verwendendes Claude Modell (Standard: claude-haiku-4-5).<br>
+    claude-haiku-4-5 ist aktuell das kostengünstigste verfügbare Claude-Modell und für viele typische FHEM-Anwendungen eine gute Standardwahl.</li><br>
+
+  <a id="Claude-attr-timeout"></a>
+  <li>timeout<br>
+    HTTP Timeout in Sekunden (Standard: 30)</li><br>
+
+  <li><a href="#disable">disable</a><br>
+    Deaktiviert das Modul.</li><br>
+
+  <a id="Claude-attr-systemPrompt"></a>
+  <li>systemPrompt<br>
+    Optionaler System-Prompt, der bei jeder Anfrage mitgesendet wird.<br>
+    Je länger der Prompt ist, desto größer wird der mitgesendete Kontext pro Anfrage.</li><br>
+
+  <a id="Claude-attr-maxHistory"></a>
+  <li>maxHistory<br>
+    Maximale Anzahl der gespeicherten Chat-Nachrichten (Standard: 10).<br>
+    Ein kleinerer Wert hält den mitgesendeten Verlauf kompakter, weil weniger frühere Nachrichten erneut an Claude gesendet werden.</li><br>
+
+  <a id="Claude-attr-maxTokens"></a>
+  <li>maxTokens<br>
+    Maximale Antwortlänge.<br>
+    Wenn das Attribut nicht gesetzt ist, verwendet das Modul je nach Anfrageart unterschiedliche Fallback-Werte:
+    600 für normale Anfragen wie ask oder askAboutDevices, sowie 300 für control bzw. Tool Use.
+    Wenn das Attribut gesetzt ist, überschreibt dieser Wert die jeweiligen Fallbacks.
+    Ein kleinerer Wert begrenzt den zu erwartenden Tokenverbrauch, kann Antworten aber kürzer ausfallen lassen.</li><br>
+
+  <a id="Claude-attr-disableHistory"></a>
+  <li>disableHistory<br>
+    Deaktiviert den Chat-Verlauf.<br>
+    Bei Deaktivierung wird jede Anfrage ohne vorherigen Chat-Verlauf gesendet und als eigenständiges Gespräch behandelt.
+    Der interne Verlauf bleibt erhalten (für resetChat), wird aber nicht an die API übermittelt.
+    Das kann bei vielen Anwendungsfällen Tokens sparen, reduziert aber den Gesprächskontext.</li><br>
+
+  <a id="Claude-attr-promptCaching"></a>
+  <li>promptCaching<br>
+    Aktiviert Prompt-Caching in der Claude API.<br>
+    Das ist besonders sinnvoll bei wiederkehrenden Prompts, Gerätekontexten oder ähnlichen Anfragen und kann den laufenden Verbrauch reduzieren.</li><br>
+
+  <a id="Claude-attr-showAdvancedTokenReadings"></a>
+  <li>showAdvancedTokenReadings<br>
+    Aktiviert erweiterte Token-/Cache-Readings.
+    Bei Aktivierung werden zusätzliche technische Detail-Readings wie Cache-Erzeugung und Cache-Lese-Tokens angezeigt.
+    In der Standardeinstellung sind diese Details ausgeblendet.</li><br>
+
+  <a id="Claude-attr-deviceContextMode"></a>
+  <li>deviceContextMode [compact|detailed]<br>
+    Steuert, wie viele Geräteinformationen bei askAboutDevices an Claude gesendet werden.<br>
+    compact sendet pro Gerät nur den Alias, den aktuellen Status und bis zu 3 wichtige Readings.
+    Das ist für viele typische Zusammenfassungen bereits gut ausreichend und hält den Kontext klein.<br>
+    detailed sendet zusätzlich den internen Gerätenamen, den Typ sowie weitere Attribute wie room, group und alias.
+    Das ist ausführlicher und kann bei komplexeren Rückfragen hilfreich sein.</li><br>
+
+  <a id="Claude-attr-deviceList"></a>
+  <li>deviceList<br>
+    Komma-getrennte Geräteliste für askAboutDevices</li><br>
+
+  <a id="Claude-attr-deviceRoom"></a>
+  <li>deviceRoom<br>
+    Komma-getrennte Raumliste<br>
+    Alle Geräte mit passendem room-Attribut werden automatisch für askAboutDevices verwendet.
+    Kann zusammen mit deviceList verwendet werden.<br>
+    Beispiel: attr ClaudeAI deviceRoom Wohnzimmer,Kueche.</li><br>
+
+  <a id="Claude-attr-controlContextMode"></a>
+  <li>controlContextMode [compact|detailed]<br>
+    Steuert, wie viele Informationen für den control-Befehl an Claude gesendet werden.<br>
+    compact sendet pro Gerät nur Alias, internen Namen und aktuellen Status.
+    Das reicht für viele einfache Schaltbefehle bereits gut aus und hält den Kontext klein.<br>
+    detailed sendet zusätzlich eine kompakte Liste typischer verfügbarer Befehle mit.
+    Das hilft Claude bei komplexeren Steueranweisungen und kann die Auflösung freierer Formulierungen erleichtern.</li><br>
+
+  <a id="Claude-attr-localControlResolver"></a>
+  <li>localControlResolver<br>
+    Aktiviert den lokalen Resolver für den Claude-Hybridbetrieb bei control-Befehlen.<br>
+    In der Standardeinstellung ist diese Funktion aktiviert.<br>
+    Bei Aktivierung arbeitet das Modul hybrid: viele einfache und eindeutige Steuerbefehle werden direkt in FHEM ausgeführt.
+    Dafür ist in diesen Fällen kein zusätzlicher Claude-API-Aufruf nötig.
+    Das spart im Alltag Tokens und damit laufende Kosten, sodass die Nutzung von Claude in FHEM für typische Steueraufgaben in der Praxis meist gut bezahlbar bleibt.<br>
+    Komplexe, mehrdeutige oder frei formulierte Anweisungen laufen weiterhin automatisch über Claude.
+    Bei Deaktivierung wird jeder control-Befehl vollständig über Claude verarbeitet.<br>
+    Der lokale Resolver arbeitet bewusst konservativ und übernimmt nur Befehle, die sicher und eindeutig auflösbar sind.
+    Freiere oder mehrdeutige Formulierungen bleiben deshalb beim Claude-Fallback.</li><br>
+
+  <a id="Claude-attr-controlList"></a>
+  <li>controlList<br>
+    Komma-getrennte Liste der Geräte, die Claude per Tool Use steuern darf.<br>
+    Kann zusammen mit controlRoom verwendet werden.
+    Alias-Namen und verfügbare set-Befehle der Geräte werden automatisch an Claude übermittelt, sodass Sprachbefehle mit Alias-Namen und passende Befehle automatisch erkannt werden.
+    Eine kompakte und sinnvoll begrenzte Liste hält den gesendeten Kontext überschaubar.<br>
+    Beispiel: attr ClaudeAI controlList Lampe1,Heizung,Rolladen1</li><br>
+
+  <a id="Claude-attr-controlRoom"></a>
+  <li>controlRoom<br>
+    Komma-getrennte Raumliste.<br>
+    Geräte mit passendem room-Attribut werden automatisch als steuerbar eingestuft.
+    Kann zusammen mit controlList verwendet werden.<br>
+    Beispiel: attr ClaudeAI controlRoom Wohnzimmer,Kueche</li><br>
+
+  <a id="Claude-attr-readingBlacklist"></a>
+  <li>readingBlacklist<br>
+    Leerzeichen-getrennte Liste von Reading- oder Befehlsnamen, die nicht an Claude übermittelt werden sollen.<br>
+    Wildcards mit * werden unterstützt, z. B. R-* oder Wifi*.
+    Die Blacklist wird auf Device-Kontext, Control-Kontext und auf Gerätestatusabfragen angewendet.</li><br>
+
+  <a id="Claude-attr-InstanznameInstructions"></a>
+    <li>&lt;Instanzname&gt;Instructions<br>
+    Optionales Attribut an beliebigen FHEM-Geräten.<br>
+    Damit lassen sich gerätespezifische Anweisungen nur für diese Claude-Instanz hinterlegen.
+    Das Attribut wird zusätzlich zum allgemeinen comment in den Device- und Control-Kontext übernommen.<br>
+      Beispiel: Lautet der Name im define des Claude Moduls &quot;ClaudeAI&quot; (Instanzname), erscheint in FHEM-Geräten das Zusatzattribut ClaudeAIInstructions.</li>
+</ul><br>
+
+=end html_DE
+
+=begin html
+
+<a id="Claude-readings"></a>
+<b>Readings</b><br>
+<ul>
+  <li>response<br>
+    Last text response from Claude (raw Markdown)</li><br>
+
+  <li>responsePlain<br>
+    Last text response with Markdown syntax removed (plain text, ideal for Telegram, notify, etc.)</li><br>
+
+  <li>responseHTML<br>
+    Last text response with Markdown converted to HTML (ideal for tablet UI, web frontends)</li><br>
+
+  <li>responseSSML<br>
+    Last text response cleaned for speech output and prepared as SSML</li><br>
+
+  <li>state<br>
+    Current status</li><br>
+
+  <li>lastError<br>
+    Last error</li><br>
+
+  <li>chatHistory<br>
+    Number of messages in the chat history</li><br>
+
+  <li>lastCommand<br>
+    Last executed set command (e.g. Lampe1 on)</li><br>
+
+  <li>lastCommandResult<br>
+    Result of the last set command (ok or error message)</li><br>
+
+  <li>lastRequestModel<br>
+    Model name of the last request</li><br>
+
+  <li>lastRequestType<br>
+    Type of the last request, e.g. ask, askWithImage, askAboutDevices, or control</li><br>
+
+  <li>lastRequestWasLocal<br>
+    1 for local control execution without Claude API, otherwise 0</li><br>
+
+  <li>lastApiCallUsedTools<br>
+    1 if the last Claude API call used Tool Use, otherwise 0</li><br>
+
+  <li>toolUseCount<br>
+    Number of tool_use blocks contained in the last Claude control response</li><br>
+
+  <li>toolSetDeviceCount<br>
+    Number of set_device tool calls contained in the last Claude control response</li><br>
+
+  <li>toolGetDeviceStateCount<br>
+    Number of get_device_state tool calls contained in the last Claude control response</li><br>
+
+  <li>responseId<br>
+    Shows the Anthropic response ID. If an API response exceptionally does not contain an ID, or during local execution, this reading contains &quot;-&quot;.</li><br>
+
+  <li>responseType<br>
+    Shows the response type. For Anthropic responses this is normally message, and for local execution local.</li><br>
+
+  <li>responseRole<br>
+    Shows the role of the response. For Anthropic responses this is normally assistant, and for local execution also assistant.</li><br>
+
+  <li>stopReason<br>
+    Stop reason of the last Claude response. During local execution this is local.</li><br>
+
+  <li>stopSequence<br>
+    Shows the stop sequence at which Anthropic ended the response. If the response was not ended by a stop sequence or Anthropic does not send a value, this reading contains &quot;-&quot;.</li><br>
+
+  <li>stopDetails<br>
+    Shows additional details about the stop reason as JSON text. If Anthropic does not send additional details, this reading contains &quot;-&quot;.</li><br>
+
+  <li>serviceTier<br>
+    Shows the service tier reported by Anthropic, for example standard. If Anthropic does not send a value, this reading contains &quot;-&quot;.</li><br>
+
+  <li>inferenceGeo<br>
+    Shows the inference region reported by Anthropic or a backend hint such as not_available. If Anthropic does not send a value, this reading contains &quot;-&quot;.</li><br>
+
+  <li>candidatesTokenCount<br>
+    Number of tokens generated by Claude for the response</li><br>
+
+  <li>promptTokenCount<br>
+    Number of input tokens sent to Claude</li><br>
+
+  <li>totalTokenCount<br>
+    Total number of consumed tokens (input + output, optionally plus cache creation if provided)</li><br>
+</ul><br>
+
+<b>Additional Readings</b> (when the showAdvancedTokenReadings attribute is set)
+<ul>
+  <li>cacheCreationInputTokens<br>
+    Shows how many input tokens were written into a new prompt cache. 0: the field was present, but no new cache portion was created for this request.</li><br>
+
+  <li>cacheReadInputTokens<br>
+    Shows how many input tokens were read from an existing prompt cache. 0: the field was present, but no cache was used for this request.</li><br>
+
+  <li>cacheCreationEphemeral5mInputTokens<br>
+    Shows how many input tokens were written into a 5-minute cache. 0: the subfield was present, but there was no matching cache portion for this request. If Anthropic does not provide this subfield, this reading contains &quot;-&quot;.</li><br>
+
+  <li>cacheCreationEphemeral1hInputTokens<br>
+    Shows how many input tokens were written into a 1-hour cache. 0: the subfield was present, but there was no matching cache portion for this request. If Anthropic does not provide this subfield, this reading contains &quot;-&quot;.</li>
+</ul><br>
+
+=end html
+
+=begin html_DE
+
+<a id="Claude-readings"></a>
+<b>Readings</b><br>
+<ul>
+  <li>response<br>
+    Letzte Textantwort von Claude (Roh-Markdown)</li><br>
+
+  <li>responsePlain<br>
+    Letzte Textantwort, Markdown-Syntax entfernt (reiner Text, ideal für Telegram, Notify, etc.)</li><br>
+
+  <li>responseHTML<br>
+    Letzte Textantwort, Markdown in HTML (ideal für Tablet-UI, Web-Frontends)</li><br>
+
+  <li>responseSSML<br>
+    Letzte Textantwort, für Sprachausgabe bereinigt und als SSML aufbereitet</li><br>
+
+  <li>state<br>
+    Aktueller Status</li><br>
+
+  <li>lastError<br>
+    Letzter Fehler</li><br>
+
+  <li>chatHistory<br>
+    Anzahl der Nachrichten im Chat-Verlauf</li><br>
+
+  <li>lastCommand<br>
+    Letzter ausgeführter set-Befehl (z. B. Lampe1 on)</li><br>
+
+  <li>lastCommandResult<br>
+    Ergebnis des letzten set-Befehls (ok oder Fehlermeldung)</li><br>
+
+  <li>lastRequestModel<br>
+    Modellname des letzten Requests</li><br>
+
+  <li>lastRequestType<br>
+    Typ des letzten Requests, z. B. ask, askWithImage, askAboutDevices oder control</li><br>
+
+  <li>lastRequestWasLocal<br>
+    1 bei lokaler Control-Ausführung ohne Claude-API, sonst 0</li><br>
+
+  <li>lastApiCallUsedTools<br>
+    1, wenn der letzte Claude-API-Call Tool Use verwendet hat, sonst 0</li><br>
+
+  <li>toolUseCount<br>
+    Anzahl der im letzten Claude-Control-Response enthaltenen tool_use-Blöcke</li><br>
+
+  <li>toolSetDeviceCount<br>
+    Anzahl der im letzten Claude-Control-Response enthaltenen set_device-Toolaufrufe</li><br>
+
+  <li>toolGetDeviceStateCount<br>
+    Anzahl der im letzten Claude-Control-Response enthaltenen get_device_state-Toolaufrufe</li><br>
+
+  <li>responseId<br>
+      Zeigt die Anthropic-Antwort-ID. Wenn bei einer API-Antwort ausnahmsweise keine ID geliefert wird, oder bei lokaler Ausführung, steht hier &quot;-&quot;.</li><br>
+
+  <li>responseType<br>
+    Zeigt den Antworttyp. Bei Anthropic-Antworten ist das normalerweise message, bei lokaler Ausführung local.</li><br>
+
+  <li>responseRole<br>
+    Zeigt die Rolle der Antwort. Bei Anthropic-Antworten ist das normalerweise assistant, bei lokaler Ausführung ebenfalls assistant.</li><br>
+
+  <li>stopReason<br>
+    Stop-Grund der letzten Claude-Antwort. Bei lokaler Ausführung steht hier local.</li><br>
+
+  <li>stopSequence<br>
+    Zeigt die Stop-Sequenz, an der Anthropic die Antwort beendet hat. Wenn die Antwort nicht wegen einer Stop-Sequenz beendet wurde oder Anthropic keinen Wert sendet, steht hier &quot;-&quot;.</li><br>
+
+  <li>stopDetails<br>
+    Zeigt zusätzliche Details zum Stoppgrund als JSON-Text. Wenn Anthropic keine Zusatzdetails sendet, steht hier &quot;-&quot;.</li><br>
+
+  <li>serviceTier<br>
+    Zeigt den von Anthropic gemeldeten Service-Tier, zum Beispiel standard. Wenn Anthropic keinen Wert sendet, steht hier &quot;-&quot;.</li><br>
+
+  <li>inferenceGeo<br>
+    Zeigt die von Anthropic gemeldete Inferenz-Region oder einen Backend-Hinweis wie not_available. Wenn Anthropic keinen Wert sendet, steht hier &quot;-&quot;.</li><br>
+
+  <li>candidatesTokenCount<br>
+    Anzahl der von Claude für die Antwort generierten Tokens</li><br>
+
+  <li>promptTokenCount<br>
+    Anzahl der an Claude gesendeten Input-Tokens</li><br>
+
+  <li>totalTokenCount<br>
+    Gesamtsumme der verbrauchten Tokens (Input + Output, optional zzgl. Cache-Erzeugung falls geliefert)</li><br>
+</ul><br>
+
+<b>Zusätzliche Readings</b> (bei gesetztem Attribut showAdvancedTokenReadings)
+<ul>
+  <li>cacheCreationInputTokens<br>
+    Zeigt, wie viele Input-Tokens in einen neuen Prompt-Cache geschrieben wurden. 0: Das Feld wurde geliefert, aber für diesen Request wurde kein neuer Cache-Anteil erzeugt.</li><br>
+ 
+  <li>cacheReadInputTokens<br>
+    Zeigt, wie viele Input-Tokens aus einem vorhandenen Prompt-Cache gelesen wurden. 0: Das Feld wurde geliefert, aber für diesen Request wurde kein Cache genutzt.</li><br>
+
+  <li>cacheCreationEphemeral5mInputTokens<br>
+    Zeigt, wie viele Input-Tokens in einen 5-Minuten-Cache geschrieben wurden. 0: Das Unterfeld wurde geliefert, aber es gab für diesen Request keinen entsprechenden Cache-Anteil. Wenn Anthropic dieses Unterfeld nicht liefert, steht hier &quot;-&quot;.</li><br>
+
+  <li>cacheCreationEphemeral1hInputTokens<br>
+    Zeigt, wie viele Input-Tokens in einen 1-Stunden-Cache geschrieben wurden. 0: Das Unterfeld wurde geliefert, aber es gab für diesen Request keinen entsprechenden Cache-Anteil. Wenn Anthropic dieses Unterfeld nicht liefert, steht hier &quot;-&quot;.</li>
+</ul><br>
+
+=end html_DE
 =cut
