@@ -2,7 +2,7 @@
 
 # FHEM-Claude
 
-Version: 1.3.2
+Version: 1.3.3
 
 FHEM-Modul zur Anbindung der Anthropic Claude AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl und mehr – direkt aus FHEM heraus.
 
@@ -28,7 +28,7 @@ Wichtig für die Praxis: Wenn der `localControlResolver` aktiv ist, werden viele
 - ⚡ Claude-Hybridbetrieb (Lokalmodus) mit lokalem Resolver und Claude-Fallback
 - 🚀 Viele einfache Befehle direkt lokal ausführen, ohne zusätzlichen API-Call
 - 📋 Geräte-Status abfragen und zusammenfassen lassen
-- 📊 Tokenverbrauch über Readings sichtbar (`promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`)
+- 📊 Erweiterte technische Readings bei Bedarf optional sichtbar
 - 🧹 Konfigurierbare `readingBlacklist` mit Wildcard-Support für kompaktere Kontexte
 - 📝 Optionales `comment`-Attribut der Geräte zusätzlich als semantische Beschreibung
 - 🔄 Multi-Turn Chat-Verlauf (optional deaktivierbar)
@@ -195,15 +195,18 @@ set ClaudeAI chat Was bedeutet die Fehlermeldung meiner Wallbox?
 ```
 
 Verhalten:
-- wenn steuerbare Geräte über `controlList` und/oder `controlRoom`
-  konfiguriert sind, wird `chat` über die Control-Logik verarbeitet
-- dabei bleiben die Claude-spezifischen Spezialitäten des Forks erhalten:
+- `chat` sendet vorhandenen Gerätekontext aus `deviceList`/`deviceRoom`
+  grundsätzlich mit, wenn er konfiguriert ist
+- nur wenn steuerbare Geräte über `controlList` und/oder `controlRoom`
+  konfiguriert sind **und** die Nachricht wie eine Steueranweisung aussieht,
+  wird `chat` über die Control-Logik verarbeitet
+- dabei bleiben die Claude-spezifischen Spezialitäten des Moduls erhalten:
   lokaler Resolver, referenzielle Folgeanweisungen, Batch-Logik und Tool-Use
-- zusätzlich wird vorhandener Gerätekontext aus `deviceList`/`deviceRoom`
-  weiterhin mitgegeben, wenn er konfiguriert ist; `chat` kann also Steuerung
-  und allgemeinen Gerätekontext gleichzeitig nutzen
-- wenn keine steuerbaren Geräte konfiguriert sind, verhält sich `chat` wie
-  eine normale Claude-Anfrage mit optionalem Gerätekontext
+- allgemeine Fragen oder Statusfragen ohne erkannten Steuer-Intent laufen auch
+  bei gesetzter `controlList`/`controlRoom` weiter als normale Claude-Anfrage
+  mit optionalem Gerätekontext
+- lokal aufgelöste `chat`-Steuerbefehle erscheinen technisch als `control` in
+  den Advanced-Readings (`lastRequestType=control`, `lastRequestWasLocal=1`)
 
 ## Claude-Hybridbetrieb (Lokalmodus) mit lokalem Resolver
 
@@ -303,21 +306,11 @@ get ClaudeAI chatHistory
 | `localControlResolver` | Aktiviert den lokalen Resolver für den Claude-Hybridbetrieb (`0/1`); einfache und eindeutige `control`-Befehle werden direkt in FHEM ausgeführt, komplexere Fälle laufen weiter über Claude | `1` |
 | `<Instanzname>_Instructions` | Instanzspezifisches Geräteattribut pro Claude-Instanz, z. B. `ClaudeAI_Instructions`; ergänzt gerätespezifische Anweisungen für genau diese Claude-Instanz im Device- und Control-Kontext | – |
 | `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- oder Befehlsnamen, die nicht an Claude übermittelt werden; Wildcards wie `R-*` oder `Wifi_*` werden unterstützt; gilt für Device-/Control-Kontext und `get_device_state`; zusätzlich existiert eine interne Standard-Blacklist | – |
-| `showAdvancedTokenReadings` | Schaltet erweiterte Token-/Cache-Readings ein oder aus (`0/1`); Standard ist `0`, also ausgeblendet. Bei `1` werden zusätzliche technische Cache-/Token-Details als Readings sichtbar, bei `0` oder beim Löschen des Attributs werden diese zusätzlichen Readings wieder entfernt | `0` |
+| `showAdvancedReadings` | Schaltet erweiterte technische Readings ein oder aus (`0/1`); Standard ist `0`, also ausgeblendet. Bei `1` werden zusätzliche Request-, Tool-Use-, Response-Metadaten- sowie Token-/Cache-Readings sichtbar, bei `0` oder beim Löschen des Attributs werden diese zusätzlichen Readings wieder entfernt | `0` |
 
 ## Readings
 
-Token-Readings einfach erklaert
-
-Im Alltag helfen diese drei Werte am meisten:
-
-- `promptTokenCount`: wie viel Eingabe-Kontext an Claude geschickt wurde, z. B. deine Frage, Chat-Verlauf, System-Prompt oder Geraetekontext
-- `candidatesTokenCount`: wie viele Tokens Claude fuer die eigentliche Antwort erzeugt hat
-- `totalTokenCount`: grobe Gesamtsumme einer Anfrage aus Input und Output; falls Anthropic Cache-Erzeugung separat ausweist, wird dieser Anteil hier zusaetzlich mit eingerechnet
-
-Damit laesst sich schnell einschaetzen, ob eher viel Kontext gesendet wurde, die Antwort ungewoehnlich lang war oder die gesamte Anfrage insgesamt teuer war.
-
-Die Cache-Werte wie `cacheCreationInputTokens` oder `cacheReadInputTokens` sind technische Detailwerte aus der Anthropic-Antwort und im Alltag meist nur fuer Debugging oder Verbrauchsanalyse interessant. Deshalb koennen sie ueber `showAdvancedTokenReadings` ein- oder ausgeblendet werden.
+Standardmaessig sichtbare Readings:
 
 | Reading | Beschreibung |
 |---|---|
@@ -330,8 +323,13 @@ Die Cache-Werte wie `cacheCreationInputTokens` oder `cacheReadInputTokens` sind 
 | `chatHistory` | Anzahl der Nachrichten im Chat-Verlauf |
 | `lastCommand` | Letzter ausgeführter `set`-Befehl (z. B. `Lampe1 on`) |
 | `lastCommandResult` | Ergebnis des letzten `set`-Befehls (`ok` oder Fehlermeldung) |
+
+Zusaetzliche Readings bei aktiviertem `showAdvancedReadings=1`:
+
+| Reading | Beschreibung |
+|---|---|
 | `lastRequestModel` | Modellname des letzten Requests |
-| `lastRequestType` | Typ des letzten Requests, z. B. `ask`, `askWithImage`, `askAboutDevices` oder `control` |
+| `lastRequestType` | Typ des letzten Requests, z. B. `ask`, `askWithImage`, `askAboutDevices`, `chat` oder `control`; lokal aufgelöste `chat`-Steuerungen erscheinen dabei als `control` |
 | `lastRequestWasLocal` | `1` bei lokaler `control`-Ausführung ohne Claude-API, sonst `0`. Bei lokalem Resolver setzt das Modul diesen Wert explizit auf `1` |
 | `lastApiCallUsedTools` | `1`, wenn der letzte Claude-API-Call Tool Use verwendet hat, sonst `0`. Bei lokaler Ausführung steht der Wert explizit auf `0` |
 | `toolUseCount` | Anzahl der im letzten Claude-Control-Response enthaltenen `tool_use`-Blöcke. Bei lokaler Ausführung ist der Wert `0` |
@@ -348,10 +346,10 @@ Die Cache-Werte wie `cacheCreationInputTokens` oder `cacheReadInputTokens` sind 
 | `promptTokenCount` | Anzahl der an Claude gesendeten Tokens (Input) |
 | `candidatesTokenCount` | Anzahl der von Claude generierten Tokens (Antwort) |
 | `totalTokenCount` | Gesamtsumme der verbrauchten Tokens (Input + Output, optional zzgl. Cache-Erzeugung falls geliefert) |
-| `cacheCreationInputTokens` | Zeigt, wie viele Input-Tokens in einen neuen Prompt-Cache geschrieben wurden. `0` bedeutet: Das Feld wurde geliefert, aber für diesen Request wurde kein neuer Cache-Anteil erzeugt. Sichtbar nur bei aktiviertem `showAdvancedTokenReadings` |
-| `cacheReadInputTokens` | Zeigt, wie viele Input-Tokens aus einem vorhandenen Prompt-Cache gelesen wurden. `0` bedeutet: Das Feld wurde geliefert, aber für diesen Request wurde kein Cache genutzt. Sichtbar nur bei aktiviertem `showAdvancedTokenReadings` |
-| `cacheCreationEphemeral5mInputTokens` | Zeigt, wie viele Input-Tokens in einen 5-Minuten-Cache geschrieben wurden. `0` bedeutet: Das Unterfeld wurde geliefert, aber es gab fuer diesen Request keinen entsprechenden Cache-Anteil. Wenn Anthropic dieses Unterfeld nicht liefert, steht hier `-`. Sichtbar nur bei aktiviertem `showAdvancedTokenReadings` |
-| `cacheCreationEphemeral1hInputTokens` | Zeigt, wie viele Input-Tokens in einen 1-Stunden-Cache geschrieben wurden. `0` bedeutet: Das Unterfeld wurde geliefert, aber es gab fuer diesen Request keinen entsprechenden Cache-Anteil. Wenn Anthropic dieses Unterfeld nicht liefert, steht hier `-`. Sichtbar nur bei aktiviertem `showAdvancedTokenReadings` |
+| `cacheCreationInputTokens` | Zeigt, wie viele Input-Tokens in einen neuen Prompt-Cache geschrieben wurden. `0` bedeutet: Das Feld wurde geliefert, aber für diesen Request wurde kein neuer Cache-Anteil erzeugt |
+| `cacheReadInputTokens` | Zeigt, wie viele Input-Tokens aus einem vorhandenen Prompt-Cache gelesen wurden. `0` bedeutet: Das Feld wurde geliefert, aber für diesen Request wurde kein Cache genutzt |
+| `cacheCreationEphemeral5mInputTokens` | Zeigt, wie viele Input-Tokens in einen 5-Minuten-Cache geschrieben wurden. `0` bedeutet: Das Unterfeld wurde geliefert, aber es gab fuer diesen Request keinen entsprechenden Cache-Anteil. Wenn Anthropic dieses Unterfeld nicht liefert, steht hier `-` |
+| `cacheCreationEphemeral1hInputTokens` | Zeigt, wie viele Input-Tokens in einen 1-Stunden-Cache geschrieben wurden. `0` bedeutet: Das Unterfeld wurde geliefert, aber es gab fuer diesen Request keinen entsprechenden Cache-Anteil. Wenn Anthropic dieses Unterfeld nicht liefert, steht hier `-` |
 
 ## Hinweise zu Kosten und Haftung
 

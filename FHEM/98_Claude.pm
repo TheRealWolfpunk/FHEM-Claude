@@ -26,6 +26,9 @@
 ########################################################################################
 
 # Version history:
+# 1.3.3 - 2026-04-18  Change: chat now routes more selectively into control mode;
+#                          prompt-caching beta header is only sent when promptCaching
+#                          is enabled; device/context handling improved
 # 1.3.2 - 2026-04-17  New: additional Claude metadata and more robust
 #                          evaluation of optional API fields; extended
 #                          token/cache readings can be shown or hidden
@@ -90,7 +93,7 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
-my $MODULE_VERSION = '1.3.2';
+my $MODULE_VERSION = '1.3.3';
 
 ##############################################################################
 # Module initialization: register define/set/get/attr handlers and attr list
@@ -112,7 +115,7 @@ sub Claude_Initialize {
         'disable:1,0 ' .
         'disableHistory:1,0 ' .
         'promptCaching:1,0 ' .
-        'showAdvancedTokenReadings:1,0 ' .
+        'showAdvancedReadings:1,0 ' .
         'deviceContextMode:compact,detailed ' .
         'controlContextMode:compact,detailed ' .
         'localControlResolver:1,0 ' .
@@ -135,30 +138,55 @@ sub Claude_Initialize {
 
 
 ##############################################################################
-# Helper function: check whether advanced token/cache readings are enabled
+# Helper function: check whether advanced readings are enabled
 ##############################################################################
 sub Claude_HasAdvancedTokenReadingsEnabled {
     my ($hash) = @_;
     return 1 unless $hash && ref($hash) eq 'HASH';
 
     my $name = $hash->{NAME};
-    return AttrVal($name, 'showAdvancedTokenReadings', 0) ? 1 : 0;
+    return AttrVal($name, 'showAdvancedReadings', 0) ? 1 : 0;
 }
 
 ##############################################################################
-# Helper function: clear optional advanced token/cache readings
+# Helper function: return the list of optional advanced readings
+##############################################################################
+sub Claude_GetAdvancedReadingNames {
+    return (
+        'lastRequestModel',
+        'lastRequestType',
+        'lastRequestWasLocal',
+        'lastApiCallUsedTools',
+        'toolUseCount',
+        'toolSetDeviceCount',
+        'toolGetDeviceStateCount',
+        'responseId',
+        'responseType',
+        'responseRole',
+        'stopReason',
+        'stopSequence',
+        'stopDetails',
+        'serviceTier',
+        'inferenceGeo',
+        'candidatesTokenCount',
+        'promptTokenCount',
+        'totalTokenCount',
+        'cacheCreationInputTokens',
+        'cacheReadInputTokens',
+        'cacheCreationEphemeral5mInputTokens',
+        'cacheCreationEphemeral1hInputTokens'
+    );
+}
+
+##############################################################################
+# Helper function: clear optional advanced readings
 ##############################################################################
 sub Claude_ClearAdvancedTokenReadings {
     my ($hash) = @_;
     return unless $hash && ref($hash) eq 'HASH';
 
     my $name = $hash->{NAME};
-    for my $reading (
-        'cacheCreationInputTokens',
-        'cacheReadInputTokens',
-        'cacheCreationEphemeral5mInputTokens',
-        'cacheCreationEphemeral1hInputTokens'
-    ) {
+    for my $reading (Claude_GetAdvancedReadingNames()) {
         CommandDeleteReading(undef, "$name $reading");
     }
 
@@ -188,32 +216,37 @@ sub Claude_Define {
     readingsSingleUpdate($hash, 'lastError',         '-',           0);
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
-    readingsSingleUpdate($hash, 'candidatesTokenCount',      '-',   0);
-    readingsSingleUpdate($hash, 'promptTokenCount',          '-',   0);
-    readingsSingleUpdate($hash, 'totalTokenCount',           '-',   0);
     if (Claude_HasAdvancedTokenReadingsEnabled($hash)) {
-        readingsSingleUpdate($hash, 'cacheCreationInputTokens',  '-',   0);
-        readingsSingleUpdate($hash, 'cacheReadInputTokens',      '-',   0);
+        my %advancedDefaults = (
+            lastRequestModel                    => '-',
+            lastRequestType                     => '-',
+            lastRequestWasLocal                 => '0',
+            lastApiCallUsedTools                => '0',
+            toolUseCount                        => '0',
+            toolSetDeviceCount                  => '0',
+            toolGetDeviceStateCount             => '0',
+            responseId                          => '-',
+            responseType                        => '-',
+            responseRole                        => '-',
+            stopReason                          => '-',
+            stopSequence                        => '-',
+            stopDetails                         => '-',
+            serviceTier                         => '-',
+            inferenceGeo                        => '-',
+            candidatesTokenCount                => '-',
+            promptTokenCount                    => '-',
+            totalTokenCount                     => '-',
+            cacheCreationInputTokens            => '-',
+            cacheReadInputTokens                => '-',
+            cacheCreationEphemeral5mInputTokens => '-',
+            cacheCreationEphemeral1hInputTokens => '-',
+        );
+        for my $reading (Claude_GetAdvancedReadingNames()) {
+            readingsSingleUpdate($hash, $reading, $advancedDefaults{$reading}, 0);
+        }
+    } else {
+        Claude_ClearAdvancedTokenReadings($hash);
     }
-    readingsSingleUpdate($hash, 'stopReason',                '-',   0);
-    readingsSingleUpdate($hash, 'stopSequence',              '-',   0);
-    readingsSingleUpdate($hash, 'stopDetails',               '-',   0);
-    readingsSingleUpdate($hash, 'responseId',                '-',   0);
-    readingsSingleUpdate($hash, 'responseType',              '-',   0);
-    readingsSingleUpdate($hash, 'responseRole',              '-',   0);
-    readingsSingleUpdate($hash, 'serviceTier',               '-',   0);
-    readingsSingleUpdate($hash, 'inferenceGeo',              '-',   0);
-    if (Claude_HasAdvancedTokenReadingsEnabled($hash)) {
-        readingsSingleUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-', 0);
-        readingsSingleUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-', 0);
-    }
-    readingsSingleUpdate($hash, 'lastRequestModel',          '-',   0);
-    readingsSingleUpdate($hash, 'lastRequestType',           '-',   0);
-    readingsSingleUpdate($hash, 'lastRequestWasLocal',       '0',   0);
-    readingsSingleUpdate($hash, 'lastApiCallUsedTools',      '0',   0);
-    readingsSingleUpdate($hash, 'toolUseCount',              '0',   0);
-    readingsSingleUpdate($hash, 'toolSetDeviceCount',        '0',   0);
-    readingsSingleUpdate($hash, 'toolGetDeviceStateCount',   '0',   0);
     $hash->{LAST_CONTROLLED_DEVICES} = [];
     $hash->{LAST_CONTROL_BATCH}      = undef;
 
@@ -249,17 +282,41 @@ sub Claude_Attr {
     if ($cmd eq 'set' && $attr eq 'maxTokens') {
         return "maxTokens must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
     }
-    if ($attr eq 'showAdvancedTokenReadings') {
+    if ($attr eq 'showAdvancedReadings') {
         my $hash = $defs{$name};
         return undef unless $hash && ref($hash) eq 'HASH';
 
         if ($cmd eq 'set') {
             if ($value) {
+                my %advancedDefaults = (
+                    lastRequestModel                    => '-',
+                    lastRequestType                     => '-',
+                    lastRequestWasLocal                 => '0',
+                    lastApiCallUsedTools                => '0',
+                    toolUseCount                        => '0',
+                    toolSetDeviceCount                  => '0',
+                    toolGetDeviceStateCount             => '0',
+                    responseId                          => '-',
+                    responseType                        => '-',
+                    responseRole                        => '-',
+                    stopReason                          => '-',
+                    stopSequence                        => '-',
+                    stopDetails                         => '-',
+                    serviceTier                         => '-',
+                    inferenceGeo                        => '-',
+                    candidatesTokenCount                => '-',
+                    promptTokenCount                    => '-',
+                    totalTokenCount                     => '-',
+                    cacheCreationInputTokens            => '-',
+                    cacheReadInputTokens                => '-',
+                    cacheCreationEphemeral5mInputTokens => '-',
+                    cacheCreationEphemeral1hInputTokens => '-',
+                );
+
                 readingsBeginUpdate($hash);
-                readingsBulkUpdate($hash, 'cacheCreationInputTokens', '-');
-                readingsBulkUpdate($hash, 'cacheReadInputTokens', '-');
-                readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-');
-                readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-');
+                for my $reading (Claude_GetAdvancedReadingNames()) {
+                    readingsBulkUpdate($hash, $reading, $advancedDefaults{$reading});
+                }
                 readingsEndUpdate($hash, 1);
             } else {
                 Claude_ClearAdvancedTokenReadings($hash);
@@ -282,7 +339,7 @@ sub Claude_Set {
     if ($cmd eq 'ask') {
         return "Usage: set $name ask <question>" unless @args;
         my $question = join(' ', @args);
-        Claude_SendRequest($hash, $question, undef, undef);
+        Claude_SendRequest($hash, $question, undef, undef, 'ask');
         return undef;
 
     } elsif ($cmd eq 'askWithImage') {
@@ -290,13 +347,14 @@ sub Claude_Set {
         my $imagePath = $args[0];
         my $question  = join(' ', @args[1..$#args]);
         return "Image file not found: $imagePath" unless -f $imagePath;
-        Claude_SendRequest($hash, $question, $imagePath, undef);
+        Claude_SendRequest($hash, $question, $imagePath, undef, 'askWithImage');
         return undef;
 
     } elsif ($cmd eq 'askAboutDevices') {
         my $question      = @args ? join(' ', @args) : 'Gib mir eine Zusammenfassung aller Geraete und ihres aktuellen Status.';
         my $deviceContext = Claude_BuildDeviceContext($hash);
-        Claude_SendRequest($hash, $question, undef, $deviceContext);
+        return Claude_HandleMissingDeviceContext($hash, 'askAboutDevices') unless $deviceContext;
+        Claude_SendRequest($hash, $question, undef, $deviceContext, 'askAboutDevices');
         return undef;
 
     } elsif ($cmd eq 'chat') {
@@ -304,10 +362,11 @@ sub Claude_Set {
         my $message = join(' ', @args);
         my @controlDevices = Claude_GetControlDevices($hash);
         my $deviceContext = Claude_BuildDeviceContext($hash);
-        if (@controlDevices) {
+
+        if (@controlDevices && Claude_ChatLooksLikeControlIntent($hash, $message)) {
             Claude_SendControl($hash, $message, $deviceContext);
         } else {
-            Claude_SendRequest($hash, $message, undef, $deviceContext || undef);
+            Claude_SendRequest($hash, $message, undef, $deviceContext || undef, 'chat');
         }
         return undef;
 
@@ -537,14 +596,18 @@ sub Claude_TrimHistory {
 # Helper function: Claude API request header
 ##############################################################################
 sub Claude_RequestHeaders {
-    my ($apiKey) = @_;
+    my ($apiKey, %opts) = @_;
 
-    return
-        "Content-Type: application/json\r\n" .
-        "Accept: application/json\r\n" .
-        "anthropic-version: 2023-06-01\r\n" .
-        "anthropic-beta: prompt-caching-2024-07-31\r\n" .
-        "x-api-key: $apiKey";
+    my @headers = (
+        "Content-Type: application/json",
+        "Accept: application/json",
+        "anthropic-version: 2023-06-01",
+    );
+
+    push @headers, "anthropic-beta: prompt-caching-2024-07-31" if $opts{prompt_caching};
+    push @headers, "x-api-key: $apiKey";
+
+    return join("\r\n", @headers);
 }
 
 ##############################################################################
@@ -613,6 +676,8 @@ sub Claude_UpdateResponseMetadataReadings {
     my $stopDetails         = $result->{stop_details};
     my $stopDetailsString   = defined $stopDetails ? eval { encode_json($stopDetails) } : undef;
     $stopDetailsString      = defined $stopDetails ? "$stopDetails" : undef if defined $stopDetails && !defined $stopDetailsString;
+    my $serviceTierValue    = defined $result->{service_tier}  ? $result->{service_tier}  : $usage->{service_tier};
+    my $inferenceGeoValue   = defined $result->{inference_geo} ? $result->{inference_geo} : $usage->{inference_geo};
 
     my $hasAnyTokenCount = (defined $inputTokens || defined $outputTokens || defined $cacheCreationTokens) ? 1 : 0;
     my $totalTokens = 0;
@@ -629,34 +694,34 @@ sub Claude_UpdateResponseMetadataReadings {
     my $toolGetStateCount= defined $opts{tool_get_count}   ? $opts{tool_get_count}   : 0;
     my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
 
-    readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'promptTokenCount',         defined $inputTokens         ? $inputTokens         : '-');
-    readingsBulkUpdate($hash, 'candidatesTokenCount',     defined $outputTokens        ? $outputTokens        : '-');
-    readingsBulkUpdate($hash, 'totalTokenCount',          $hasAnyTokenCount ? $totalTokens : '-');
     if ($showAdvancedTokenReadings) {
+        readingsBeginUpdate($hash);
+        readingsBulkUpdate($hash, 'promptTokenCount',         defined $inputTokens         ? $inputTokens         : '-');
+        readingsBulkUpdate($hash, 'candidatesTokenCount',     defined $outputTokens        ? $outputTokens        : '-');
+        readingsBulkUpdate($hash, 'totalTokenCount',          $hasAnyTokenCount ? $totalTokens : '-');
         readingsBulkUpdate($hash, 'cacheCreationInputTokens', defined $cacheCreationTokens ? $cacheCreationTokens : '-');
         readingsBulkUpdate($hash, 'cacheReadInputTokens',     defined $cacheReadTokens     ? $cacheReadTokens     : '-');
-    }
-    readingsBulkUpdate($hash, 'stopReason',               defined $result->{stop_reason}   ? $result->{stop_reason}   : '-');
-    readingsBulkUpdate($hash, 'stopSequence',             defined $result->{stop_sequence} ? $result->{stop_sequence} : '-');
-    readingsBulkUpdate($hash, 'stopDetails',              defined $stopDetailsString       ? $stopDetailsString       : '-');
-    readingsBulkUpdate($hash, 'responseId',               defined $result->{id}            ? $result->{id}            : '-');
-    readingsBulkUpdate($hash, 'responseType',             defined $result->{type}          ? $result->{type}          : '-');
-    readingsBulkUpdate($hash, 'responseRole',             defined $result->{role}          ? $result->{role}          : '-');
-    readingsBulkUpdate($hash, 'serviceTier',              defined $usage->{service_tier}   ? $usage->{service_tier}   : '-');
-    readingsBulkUpdate($hash, 'inferenceGeo',             defined $usage->{inference_geo}  ? $usage->{inference_geo}  : '-');
-    if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'stopReason',               defined $result->{stop_reason}   ? $result->{stop_reason}   : '-');
+        readingsBulkUpdate($hash, 'stopSequence',             defined $result->{stop_sequence} ? $result->{stop_sequence} : '-');
+        readingsBulkUpdate($hash, 'stopDetails',              defined $stopDetailsString       ? $stopDetailsString       : '-');
+        readingsBulkUpdate($hash, 'responseId',               defined $result->{id}            ? $result->{id}            : '-');
+        readingsBulkUpdate($hash, 'responseType',             defined $result->{type}          ? $result->{type}          : '-');
+        readingsBulkUpdate($hash, 'responseRole',             defined $result->{role}          ? $result->{role}          : '-');
+        readingsBulkUpdate($hash, 'serviceTier',              defined $serviceTierValue         ? $serviceTierValue         : '-');
+        readingsBulkUpdate($hash, 'inferenceGeo',             defined $inferenceGeoValue        ? $inferenceGeoValue        : '-');
         readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', defined $cache5mTokens ? $cache5mTokens : '-');
         readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', defined $cache1hTokens ? $cache1hTokens : '-');
+        readingsBulkUpdate($hash, 'lastRequestModel',         defined $lastRequestModel        ? $lastRequestModel        : '-');
+        readingsBulkUpdate($hash, 'lastRequestType',          defined $lastRequestType         ? $lastRequestType         : '-');
+        readingsBulkUpdate($hash, 'lastRequestWasLocal',      $lastWasLocal ? '1' : '0');
+        readingsBulkUpdate($hash, 'lastApiCallUsedTools',     $usedTools ? '1' : '0');
+        readingsBulkUpdate($hash, 'toolUseCount',             $toolUseCount);
+        readingsBulkUpdate($hash, 'toolSetDeviceCount',       $toolSetCount);
+        readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  $toolGetStateCount);
+        readingsEndUpdate($hash, 1);
+    } else {
+        Claude_ClearAdvancedTokenReadings($hash);
     }
-    readingsBulkUpdate($hash, 'lastRequestModel',         defined $lastRequestModel        ? $lastRequestModel        : '-');
-    readingsBulkUpdate($hash, 'lastRequestType',          defined $lastRequestType         ? $lastRequestType         : '-');
-    readingsBulkUpdate($hash, 'lastRequestWasLocal',      $lastWasLocal ? '1' : '0');
-    readingsBulkUpdate($hash, 'lastApiCallUsedTools',     $usedTools ? '1' : '0');
-    readingsBulkUpdate($hash, 'toolUseCount',             $toolUseCount);
-    readingsBulkUpdate($hash, 'toolSetDeviceCount',       $toolSetCount);
-    readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  $toolGetStateCount);
-    readingsEndUpdate($hash, 1);
 
     return;
 }
@@ -665,8 +730,11 @@ sub Claude_UpdateResponseMetadataReadings {
 # Main function: send request to the Claude API
 ##############################################################################
 sub Claude_SendRequest {
-    my ($hash, $question, $imagePath, $deviceContext) = @_;
+    my ($hash, $question, $imagePath, $deviceContext, $requestType) = @_;
     my $name = $hash->{NAME};
+    $requestType = defined $requestType && $requestType ne ''
+        ? $requestType
+        : ($imagePath ? 'askWithImage' : ($deviceContext ? 'askAboutDevices' : 'ask'));
 
     # Module disabled? Then do not execute a request
     if (AttrVal($name, 'disable', 0)) {
@@ -687,16 +755,21 @@ sub Claude_SendRequest {
     my $maxHistory = int(AttrVal($name, 'maxHistory', 10));
     my $maxTokens  = int(AttrVal($name, 'maxTokens',  600));
     my $cacheControl = Claude_GetPromptCacheControl($hash);
+    my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
 
-    readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'lastRequestType',      $imagePath ? 'askWithImage' : ($deviceContext ? 'askAboutDevices' : 'ask'));
-    readingsBulkUpdate($hash, 'lastRequestModel',     $model);
-    readingsBulkUpdate($hash, 'lastRequestWasLocal',  '0');
-    readingsBulkUpdate($hash, 'lastApiCallUsedTools', '0');
-    readingsBulkUpdate($hash, 'toolUseCount',         '0');
-    readingsBulkUpdate($hash, 'toolSetDeviceCount',   '0');
-    readingsBulkUpdate($hash, 'toolGetDeviceStateCount', '0');
-    readingsEndUpdate($hash, 1);
+    if ($showAdvancedTokenReadings) {
+        readingsBeginUpdate($hash);
+        readingsBulkUpdate($hash, 'lastRequestType',      $requestType);
+        readingsBulkUpdate($hash, 'lastRequestModel',     $model);
+        readingsBulkUpdate($hash, 'lastRequestWasLocal',  '0');
+        readingsBulkUpdate($hash, 'lastApiCallUsedTools', '0');
+        readingsBulkUpdate($hash, 'toolUseCount',         '0');
+        readingsBulkUpdate($hash, 'toolSetDeviceCount',   '0');
+        readingsBulkUpdate($hash, 'toolGetDeviceStateCount', '0');
+        readingsEndUpdate($hash, 1);
+    } else {
+        Claude_ClearAdvancedTokenReadings($hash);
+    }
 
     Log3 $name, 4, "Claude ($name): Using model $model";
 
@@ -791,7 +864,7 @@ sub Claude_SendRequest {
         url      => Claude_ApiUrl(),
         timeout  => $timeout,
         method   => 'POST',
-        header   => Claude_RequestHeaders($apiKey),
+        header   => Claude_RequestHeaders($apiKey, prompt_caching => Claude_HasPromptCachingEnabled($hash)),
         data     => $jsonBody,
         hash     => $hash,
         callback => \&Claude_HandleResponse,
@@ -854,7 +927,7 @@ sub Claude_HandleResponse {
     }
 
     # Claude returns the actual response as a list of content blocks
-    my $contentBlocks = $result->{content} // [];
+    my $contentBlocks = (ref($result->{content}) eq 'ARRAY') ? $result->{content} : [];
     my $responseUnicode = '';
     my %contentTypes;
     for my $part (@$contentBlocks) {
@@ -889,6 +962,7 @@ sub Claude_HandleResponse {
         role    => 'assistant',
         content => $contentBlocks
     };
+    Claude_TrimHistory($hash, int(AttrVal($name, 'maxHistory', 10)));
 
     my $responseForReading = $responseUnicode;
     utf8::encode($responseForReading) if utf8::is_utf8($responseForReading);
@@ -969,14 +1043,14 @@ sub Claude_MarkdownToHTML {
     $text =~ s/_(.+?)_/<i>$1<\/i>/gs;
     $text =~ s/`(.+?)`/<code>$1<\/code>/gs;
     $text =~ s/^#{6}\s+(.+)$/<h6>$1<\/h6>/gm;
-    $text =~ s/^#{5}\s+(.+)$/<h6>$1<\/h6>/gm;
-    $text =~ s/^#{4}\s+(.+)$/<h6>$1<\/h6>/gm;
-    $text =~ s/^#{3}\s+(.+)$/<h5>$1<\/h5>/gm;
-    $text =~ s/^#{2}\s+(.+)$/<h4>$1<\/h4>/gm;
-    $text =~ s/^#\s+(.+)$/<h3>$1<\/h3>/gm;
+    $text =~ s/^#{5}\s+(.+)$/<h5>$1<\/h5>/gm;
+    $text =~ s/^#{4}\s+(.+)$/<h4>$1<\/h4>/gm;
+    $text =~ s/^#{3}\s+(.+)$/<h3>$1<\/h3>/gm;
+    $text =~ s/^#{2}\s+(.+)$/<h2>$1<\/h2>/gm;
+    $text =~ s/^#\s+(.+)$/<h1>$1<\/h1>/gm;
     $text =~ s/((?:^[\-\*]\s+.+\n?)+)/my $block = $1; $block =~ s{^[\-\*]\s+(.+)$}{<li>$1<\/li>}gm; "<ul>$block<\/ul>"/gme;
     $text =~ s/^(?:---|\*\*\*)\s*$/<hr>/gm;
-    $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[3-6]|\/h[3-6]|pre|\/pre|code|\/code|hr))/<br>\n/g;
+    $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[1-6]|\/h[1-6]|pre|\/pre|code|\/code|hr))/<br>\n/g;
 
     return $text;
 }
@@ -1220,6 +1294,37 @@ sub Claude_GetRelevantReadings {
     }
 
     return @result;
+}
+
+##############################################################################
+# Helper function: build the askAboutDevices device context for Claude
+##############################################################################
+sub Claude_HandleMissingDeviceContext {
+    my ($hash, $requestType) = @_;
+    return 'Error: invalid Claude device instance' unless $hash && ref($hash) eq 'HASH';
+
+    my $name = $hash->{NAME} // 'Claude';
+    $requestType = defined $requestType && $requestType ne '' ? $requestType : 'askAboutDevices';
+
+    my $errMsg = "Error: no devices configured for $requestType (set attribute deviceList and/or deviceRoom)";
+    my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
+
+    readingsBeginUpdate($hash);
+    readingsBulkUpdate($hash, 'lastError', $errMsg);
+    readingsBulkUpdate($hash, 'state', 'error');
+    if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'lastRequestType', $requestType);
+        readingsBulkUpdate($hash, 'lastRequestWasLocal', '0');
+        readingsBulkUpdate($hash, 'lastApiCallUsedTools', '0');
+        readingsBulkUpdate($hash, 'toolUseCount', '0');
+        readingsBulkUpdate($hash, 'toolSetDeviceCount', '0');
+        readingsBulkUpdate($hash, 'toolGetDeviceStateCount', '0');
+    }
+    readingsEndUpdate($hash, 1);
+    Claude_ClearAdvancedTokenReadings($hash) unless $showAdvancedTokenReadings;
+
+    Log3 $name, 2, "Claude ($name): $errMsg";
+    return $errMsg;
 }
 
 ##############################################################################
@@ -1823,11 +1928,31 @@ sub Claude_GetIntentSignals {
     $signals{open_like}         = 1 if $text =~ /\b(?:hoch|auf|oeffne|oeffnen|up|open)\b/;
     $signals{close_like}        = 1 if $text =~ /\b(?:runter|zu|schliesse|schliessen|down|close)\b/;
     $signals{stop}              = 1 if $text =~ /\b(?:stop|stopp|anhalten)\b/;
-    $signals{percent_value}     = 1 if $text =~ /\b(?:%|prozent|pct)\b/;
+    $signals{percent_value}     = 1 if $text =~ /%|\b(?:prozent|pct)\b/;
     $signals{temperature_value} = 1 if $text =~ /\b(?:grad|temperature|temperatur|desired temp|desiredtemp|solltemperatur)\b/;
     $signals{numeric_value}     = 1 if $text =~ /\b-?\d+(?:[.,]\d+)?\b/;
 
     return \%signals;
+}
+
+##############################################################################
+# Helper function: decide whether a chat message should use control mode
+##############################################################################
+sub Claude_ChatLooksLikeControlIntent {
+    my ($hash, $message) = @_;
+    return 0 unless defined $message && $message ne '';
+
+    my $signals = Claude_GetIntentSignals($message);
+    return 1 if $signals->{turn_on} || $signals->{turn_off} || $signals->{toggle} || $signals->{increase} || $signals->{decrease} || $signals->{open_like} || $signals->{close_like} || $signals->{stop};
+
+    return 1 if Claude_IsReferentialFollowupInstruction($message, $hash);
+
+    my $text = Claude_NormalizeText($message);
+    return 0 if $text eq '';
+
+    return 1 if $signals->{numeric_value} && $text =~ /\b(?:stell|setze|setz|dimme|dimm|fahre|position|prozent|grad)\b/;
+
+    return 0;
 }
 
 ##############################################################################
@@ -2199,7 +2324,10 @@ sub Claude_ShouldPreferRememberedBatchRoom {
     my $currentNorm    = Claude_NormalizeText($currentRoom);
     my $rememberedNorm = Claude_NormalizeText($rememberedRoom);
 
-    return ($currentNorm ne '' && $rememberedNorm ne '' && $currentNorm eq $rememberedNorm) ? 1 : 0;
+    return 0 if $rememberedNorm eq '';
+    return 1 if $currentNorm eq '';
+
+    return ($currentNorm ne $rememberedNorm) ? 1 : 0;
 }
 
 ##############################################################################
@@ -3031,11 +3159,11 @@ sub Claude_BuildLocalControlSummary {
     my $repeat   = $hasRepeatCue ? Claude_LocalSummaryRepeatPhrase($hash, $instruction, $command, $subject) : '';
 
     return "$subject ist$temporal$repeat an." if $command eq 'on' && $takes_singular && $hasRepeatCue;
-    return "$subject sind$temporal$repeat an." if $command eq 'on' && $hasRepeatCue;
+    return "$subject sind$temporal$repeat an." if $command eq 'on' && !$takes_singular && $hasRepeatCue;
     return "$subject ist$temporal an." if $command eq 'on' && $takes_singular;
     return "$subject sind$temporal an." if $command eq 'on';
     return "$subject ist$temporal$repeat aus." if $command eq 'off' && $takes_singular && $hasRepeatCue;
-    return "$subject sind$temporal$repeat aus." if $command eq 'off' && $hasRepeatCue;
+    return "$subject sind$temporal$repeat aus." if $command eq 'off' && !$takes_singular && $hasRepeatCue;
     return "$subject ist$temporal aus." if $command eq 'off' && $takes_singular;
     return "$subject sind$temporal aus." if $command eq 'off';
     return "$subject wurde umgeschaltet." if $command eq 'toggle' && $takes_singular;
@@ -3125,31 +3253,32 @@ sub Claude_ExecuteLocalResolvedBatch {
     my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
 
     readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'lastCommand',              $lastCmd);
-    readingsBulkUpdate($hash, 'lastCommandResult',        'ok');
-    readingsBulkUpdate($hash, 'response',                 $summary);
-    readingsBulkUpdate($hash, 'responsePlain',            $plain);
-    readingsBulkUpdate($hash, 'responseHTML',             $html);
-    readingsBulkUpdate($hash, 'responseSSML',             $ssml);
-    readingsBulkUpdate($hash, 'state',                    'ok');
-    readingsBulkUpdate($hash, 'lastError',                '-');
-    readingsBulkUpdate($hash, 'lastRequestType',          'control');
-    readingsBulkUpdate($hash, 'lastRequestWasLocal',      '1');
-    readingsBulkUpdate($hash, 'lastApiCallUsedTools',     '0');
-    readingsBulkUpdate($hash, 'toolUseCount',             '0');
-    readingsBulkUpdate($hash, 'toolSetDeviceCount',       '0');
-    readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  '0');
-    readingsBulkUpdate($hash, 'stopReason',               'local');
-    readingsBulkUpdate($hash, 'stopSequence',             '-');
-    readingsBulkUpdate($hash, 'stopDetails',              '-');
-    readingsBulkUpdate($hash, 'responseId',               '-');
-    readingsBulkUpdate($hash, 'responseType',             'local');
-    readingsBulkUpdate($hash, 'responseRole',             'assistant');
-    readingsBulkUpdate($hash, 'serviceTier',              '-');
-    readingsBulkUpdate($hash, 'inferenceGeo',             '-');
+    readingsBulkUpdate($hash, 'lastCommand',       $lastCmd);
+    readingsBulkUpdate($hash, 'lastCommandResult', 'ok');
+    readingsBulkUpdate($hash, 'response',          $summary);
+    readingsBulkUpdate($hash, 'responsePlain',     $plain);
+    readingsBulkUpdate($hash, 'responseHTML',      $html);
+    readingsBulkUpdate($hash, 'responseSSML',      $ssml);
+    readingsBulkUpdate($hash, 'state',             'ok');
+    readingsBulkUpdate($hash, 'lastError',         '-');
     if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'lastRequestModel',         AttrVal($name, 'model', 'claude-haiku-4-5'));
+        readingsBulkUpdate($hash, 'lastRequestType',          'control');
+        readingsBulkUpdate($hash, 'lastRequestWasLocal',      '1');
+        readingsBulkUpdate($hash, 'lastApiCallUsedTools',     '0');
+        readingsBulkUpdate($hash, 'toolUseCount',             '0');
+        readingsBulkUpdate($hash, 'toolSetDeviceCount',       '0');
+        readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  '0');
+        readingsBulkUpdate($hash, 'stopReason',               'local');
+        readingsBulkUpdate($hash, 'stopSequence',             '-');
+        readingsBulkUpdate($hash, 'stopDetails',              '-');
+        readingsBulkUpdate($hash, 'responseId',               '-');
+        readingsBulkUpdate($hash, 'responseType',             'local');
+        readingsBulkUpdate($hash, 'responseRole',             'assistant');
+        readingsBulkUpdate($hash, 'serviceTier',              '-');
+        readingsBulkUpdate($hash, 'inferenceGeo',             '-');
         readingsBulkUpdate($hash, 'cacheCreationInputTokens', '-');
-        readingsBulkUpdate($hash, 'cacheReadInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheReadInputTokens',     '-');
         readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-');
         readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-');
     }
@@ -3545,31 +3674,32 @@ sub Claude_ExecuteReferentialBatchLocally {
     my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
 
     readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'lastCommand',              $lastCmd);
-    readingsBulkUpdate($hash, 'lastCommandResult',        'ok');
-    readingsBulkUpdate($hash, 'response',                 $summary);
-    readingsBulkUpdate($hash, 'responsePlain',            $plain);
-    readingsBulkUpdate($hash, 'responseHTML',             $html);
-    readingsBulkUpdate($hash, 'responseSSML',             $ssml);
-    readingsBulkUpdate($hash, 'state',                    'ok');
-    readingsBulkUpdate($hash, 'lastError',                '-');
-    readingsBulkUpdate($hash, 'lastRequestType',          'control');
-    readingsBulkUpdate($hash, 'lastRequestWasLocal',      '1');
-    readingsBulkUpdate($hash, 'lastApiCallUsedTools',     '0');
-    readingsBulkUpdate($hash, 'toolUseCount',             '0');
-    readingsBulkUpdate($hash, 'toolSetDeviceCount',       '0');
-    readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  '0');
-    readingsBulkUpdate($hash, 'stopReason',               'local');
-    readingsBulkUpdate($hash, 'stopSequence',             '-');
-    readingsBulkUpdate($hash, 'stopDetails',              '-');
-    readingsBulkUpdate($hash, 'responseId',               '-');
-    readingsBulkUpdate($hash, 'responseType',             'local');
-    readingsBulkUpdate($hash, 'responseRole',             'assistant');
-    readingsBulkUpdate($hash, 'serviceTier',              '-');
-    readingsBulkUpdate($hash, 'inferenceGeo',             '-');
+    readingsBulkUpdate($hash, 'lastCommand',       $lastCmd);
+    readingsBulkUpdate($hash, 'lastCommandResult', 'ok');
+    readingsBulkUpdate($hash, 'response',          $summary);
+    readingsBulkUpdate($hash, 'responsePlain',     $plain);
+    readingsBulkUpdate($hash, 'responseHTML',      $html);
+    readingsBulkUpdate($hash, 'responseSSML',      $ssml);
+    readingsBulkUpdate($hash, 'state',             'ok');
+    readingsBulkUpdate($hash, 'lastError',         '-');
     if ($showAdvancedTokenReadings) {
+        readingsBulkUpdate($hash, 'lastRequestModel',         AttrVal($name, 'model', 'claude-haiku-4-5'));
+        readingsBulkUpdate($hash, 'lastRequestType',          'control');
+        readingsBulkUpdate($hash, 'lastRequestWasLocal',      '1');
+        readingsBulkUpdate($hash, 'lastApiCallUsedTools',     '0');
+        readingsBulkUpdate($hash, 'toolUseCount',             '0');
+        readingsBulkUpdate($hash, 'toolSetDeviceCount',       '0');
+        readingsBulkUpdate($hash, 'toolGetDeviceStateCount',  '0');
+        readingsBulkUpdate($hash, 'stopReason',               'local');
+        readingsBulkUpdate($hash, 'stopSequence',             '-');
+        readingsBulkUpdate($hash, 'stopDetails',              '-');
+        readingsBulkUpdate($hash, 'responseId',               '-');
+        readingsBulkUpdate($hash, 'responseType',             'local');
+        readingsBulkUpdate($hash, 'responseRole',             'assistant');
+        readingsBulkUpdate($hash, 'serviceTier',              '-');
+        readingsBulkUpdate($hash, 'inferenceGeo',             '-');
         readingsBulkUpdate($hash, 'cacheCreationInputTokens', '-');
-        readingsBulkUpdate($hash, 'cacheReadInputTokens', '-');
+        readingsBulkUpdate($hash, 'cacheReadInputTokens',     '-');
         readingsBulkUpdate($hash, 'cacheCreationEphemeral5mInputTokens', '-');
         readingsBulkUpdate($hash, 'cacheCreationEphemeral1hInputTokens', '-');
     }
@@ -3614,16 +3744,21 @@ sub Claude_SendControl {
     my $effectiveHistory = $maxHistory < 6 ? 6 : $maxHistory;
     my $maxTokens  = int(AttrVal($name, 'maxTokens',  300));
     my $cacheControl = Claude_GetPromptCacheControl($hash);
+    my $showAdvancedTokenReadings = Claude_HasAdvancedTokenReadingsEnabled($hash);
 
-    readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'lastRequestType',      'control');
-    readingsBulkUpdate($hash, 'lastRequestModel',     $model);
-    readingsBulkUpdate($hash, 'lastRequestWasLocal',  '0');
-    readingsBulkUpdate($hash, 'lastApiCallUsedTools', '1');
-    readingsBulkUpdate($hash, 'toolUseCount',         '0');
-    readingsBulkUpdate($hash, 'toolSetDeviceCount',   '0');
-    readingsBulkUpdate($hash, 'toolGetDeviceStateCount', '0');
-    readingsEndUpdate($hash, 1);
+    if ($showAdvancedTokenReadings) {
+        readingsBeginUpdate($hash);
+        readingsBulkUpdate($hash, 'lastRequestType',      'control');
+        readingsBulkUpdate($hash, 'lastRequestModel',     $model);
+        readingsBulkUpdate($hash, 'lastRequestWasLocal',  '0');
+        readingsBulkUpdate($hash, 'lastApiCallUsedTools', '1');
+        readingsBulkUpdate($hash, 'toolUseCount',         '0');
+        readingsBulkUpdate($hash, 'toolSetDeviceCount',   '0');
+        readingsBulkUpdate($hash, 'toolGetDeviceStateCount', '0');
+        readingsEndUpdate($hash, 1);
+    } else {
+        Claude_ClearAdvancedTokenReadings($hash);
+    }
 
     Log3 $name, 4, "Claude ($name): Using model $model";
 
@@ -3697,7 +3832,7 @@ sub Claude_SendControl {
         url      => Claude_ApiUrl(),
         timeout  => $timeout,
         method   => 'POST',
-        header   => Claude_RequestHeaders($apiKey),
+        header   => Claude_RequestHeaders($apiKey, prompt_caching => Claude_HasPromptCachingEnabled($hash)),
         data     => $jsonBody,
         hash     => $hash,
         callback => \&Claude_HandleControlResponse,
@@ -3773,7 +3908,7 @@ sub Claude_HandleControlResponse {
         return;
     }
 
-    my $contentBlocks = $result->{content} // [];
+    my $contentBlocks = (ref($result->{content}) eq 'ARRAY') ? $result->{content} : [];
     my @toolResults;
     my @successfulDevices;
     my @successfulCommands;
@@ -3787,7 +3922,7 @@ sub Claude_HandleControlResponse {
 
         my $toolName = $part->{name}  // '';
         my $toolId   = $part->{id}    // '';
-        my $input    = $part->{input} // {};
+        my $input    = (ref($part->{input}) eq 'HASH') ? $part->{input} : {};
         my $inputJson = eval { encode_json($input) };
         $inputJson = '{json_encode_error}' if $@;
         Log3 $name, 4, "Claude ($name): ToolUse received: name=$toolName id=$toolId input=$inputJson";
@@ -4028,6 +4163,7 @@ sub Claude_HandleControlResponse {
     Claude_FinalizeRememberedControlSession($hash);
     delete $hash->{CONTROL_START_IDX};
     delete $hash->{CHAT_EXTRA_CONTEXT};
+    Claude_TrimHistory($hash, (int(AttrVal($name, 'maxHistory', 10)) < 6 ? 6 : int(AttrVal($name, 'maxHistory', 10))));
 
     my $responseForReading = $responseUnicode;
     utf8::encode($responseForReading) if utf8::is_utf8($responseForReading);
@@ -4138,7 +4274,7 @@ sub Claude_SendToolResults {
         url      => Claude_ApiUrl(),
         timeout  => $timeout,
         method   => 'POST',
-        header   => Claude_RequestHeaders($apiKey),
+        header   => Claude_RequestHeaders($apiKey, prompt_caching => Claude_HasPromptCachingEnabled($hash)),
         data     => $jsonBody,
         hash     => $hash,
         callback => \&Claude_HandleControlResponse,
@@ -4343,10 +4479,10 @@ sub Claude_SendToolResults {
     Enables prompt caching in the Claude API.<br>
     This is especially useful for recurring prompts, device contexts, or similar requests and can reduce ongoing usage.</li><br>
 
-  <a id="Claude-attr-showAdvancedTokenReadings"></a>
-  <li>showAdvancedTokenReadings<br>
-    Enables advanced token/cache readings.
-    When enabled, additional technical detail readings such as cache creation and cache read tokens are shown.
+  <a id="Claude-attr-showAdvancedReadings"></a>
+  <li>showAdvancedReadings<br>
+    Enables advanced technical readings.
+    When enabled, additional request, tool-use, response metadata, and token/cache detail readings are shown.
     By default, these details are hidden.</li><br>
 
   <a id="Claude-attr-deviceContextMode"></a>
@@ -4471,10 +4607,10 @@ sub Claude_SendToolResults {
     Aktiviert Prompt-Caching in der Claude API.<br>
     Das ist besonders sinnvoll bei wiederkehrenden Prompts, Gerätekontexten oder ähnlichen Anfragen und kann den laufenden Verbrauch reduzieren.</li><br>
 
-  <a id="Claude-attr-showAdvancedTokenReadings"></a>
-  <li>showAdvancedTokenReadings<br>
-    Aktiviert erweiterte Token-/Cache-Readings.
-    Bei Aktivierung werden zusätzliche technische Detail-Readings wie Cache-Erzeugung und Cache-Lese-Tokens angezeigt.
+  <a id="Claude-attr-showAdvancedReadings"></a>
+  <li>showAdvancedReadings<br>
+    Aktiviert erweiterte technische Readings.
+    Bei Aktivierung werden zusätzliche Request-, Tool-Use-, Response-Metadaten- sowie Token-/Cache-Readings angezeigt.
     In der Standardeinstellung sind diese Details ausgeblendet.</li><br>
 
   <a id="Claude-attr-deviceContextMode"></a>
@@ -4578,7 +4714,10 @@ sub Claude_SendToolResults {
 
   <li>lastCommandResult<br>
     Result of the last set command (ok or error message)</li><br>
+</ul><br>
 
+<b>Additional Readings</b> (when the showAdvancedReadings attribute is set)
+<ul>
   <li>lastRequestModel<br>
     Model name of the last request</li><br>
 
@@ -4632,10 +4771,7 @@ sub Claude_SendToolResults {
 
   <li>totalTokenCount<br>
     Total number of consumed tokens (input + output, optionally plus cache creation if provided)</li><br>
-</ul><br>
 
-<b>Additional Readings</b> (when the showAdvancedTokenReadings attribute is set)
-<ul>
   <li>cacheCreationInputTokens<br>
     Shows how many input tokens were written into a new prompt cache. 0: the field was present, but no new cache portion was created for this request.</li><br>
 
@@ -4682,7 +4818,10 @@ sub Claude_SendToolResults {
 
   <li>lastCommandResult<br>
     Ergebnis des letzten set-Befehls (ok oder Fehlermeldung)</li><br>
+</ul><br>
 
+<b>Zusätzliche Readings</b> (bei gesetztem Attribut showAdvancedReadings)
+<ul>
   <li>lastRequestModel<br>
     Modellname des letzten Requests</li><br>
 
@@ -4736,10 +4875,7 @@ sub Claude_SendToolResults {
 
   <li>totalTokenCount<br>
     Gesamtsumme der verbrauchten Tokens (Input + Output, optional zzgl. Cache-Erzeugung falls geliefert)</li><br>
-</ul><br>
 
-<b>Zusätzliche Readings</b> (bei gesetztem Attribut showAdvancedTokenReadings)
-<ul>
   <li>cacheCreationInputTokens<br>
     Zeigt, wie viele Input-Tokens in einen neuen Prompt-Cache geschrieben wurden. 0: Das Feld wurde geliefert, aber für diesen Request wurde kein neuer Cache-Anteil erzeugt.</li><br>
  
