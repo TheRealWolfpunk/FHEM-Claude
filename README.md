@@ -2,7 +2,7 @@
 
 # FHEM-Claude
 
-Version: 1.3.3
+(IN DEVELOPMENT)
 
 FHEM-Modul zur Anbindung der Anthropic Claude AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl und mehr – direkt aus FHEM heraus.
 
